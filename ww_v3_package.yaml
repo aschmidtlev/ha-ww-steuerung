@@ -754,6 +754,50 @@ template:
             Solange Marstek nicht verfuegbar ist, hat dieses Feld keinen Effekt.
           alter_rohwert_sensor_gesamtleistung_haushalt: "{{ states('sensor.gesamtleistung_haushalt') }}"
 
+      # --- Effizienz aus EMS-ESP-Lebenszeitzaehlern (neu) ----------------
+      # Reine Lebenszeit-Durchschnittswerte aus kumulierten EMS-ESP-
+      # Energiezaehlern, keine Tages-/Echtzeitgroesse. Bewusst nur fuer
+      # Warmwasser (nrgsupp/nrgconscomp mit dhw-Praefix) berechnet, nicht
+      # ueber das unklar benannte sensor.boiler_nrgsupptotal (Semantik nicht
+      # verifizierbar - siehe ww_v3_open_questions.md).
+      - name: WW V3 DHW COP Lebenszeit
+        unique_id: ww_v3_dhw_cop_lebenszeit
+        icon: mdi:gauge
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.boiler_dhw_nrgsupp') not in ['unknown','unavailable']
+             and states('sensor.boiler_dhw_nrgconscomp') not in ['unknown','unavailable']
+             and states('sensor.boiler_dhw_nrgconscomp') | float(0) > 0 }}
+        state: >-
+          {{ (states('sensor.boiler_dhw_nrgsupp') | float(0)
+              / states('sensor.boiler_dhw_nrgconscomp') | float(1)) | round(2) }}
+        attributes:
+          hinweis: >-
+            Lebenszeit-Durchschnitt aus sensor.boiler_dhw_nrgsupp /
+            sensor.boiler_dhw_nrgconscomp, keine Tages- oder Echtzeitgroesse.
+            Beruecksichtigt nicht die elektrische Zusatzheizung, siehe
+            sensor.ww_v3_dhw_zusatzheizung_anteil.
+
+      - name: WW V3 DHW Zusatzheizung Anteil
+        unique_id: ww_v3_dhw_zusatzheizung_anteil
+        unit_of_measurement: "%"
+        icon: mdi:heating-coil
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.boiler_dhw_auxelecheatnrgcons') not in ['unknown','unavailable']
+             and states('sensor.boiler_dhw_nrgconscomp') not in ['unknown','unavailable'] }}
+        state: >-
+          {% set aux = states('sensor.boiler_dhw_auxelecheatnrgcons') | float(0) %}
+          {% set komp = states('sensor.boiler_dhw_nrgconscomp') | float(0) %}
+          {% set summe = aux + komp %}
+          {{ ((aux / summe * 100) if summe > 0 else 0) | round(1) }}
+        attributes:
+          hinweis: >-
+            Anteil der elektrischen Zusatzheizung am gesamten elektrischen
+            Energieeinsatz fuer Warmwasser (Zusatzheizung + Verdichter),
+            Lebenszeit-Durchschnitt. Hohe Werte deuten auf haeufigen Einsatz
+            der ineffizienten (COP 1) Zusatzheizung statt des Verdichters hin.
+
       # --- PV-Forecast kombiniert Ost+West (unveraendert) ---------------
       - name: WW V3 PV Forecast Rest Heute Gesamt
         unique_id: ww_v3_pv_forecast_rest_heute_gesamt
@@ -1803,6 +1847,38 @@ automation:
           action: keine
           result: Warnung
           severity: warning
+
+  # Neu in v3: alarmiert bei jedem neuen Fehlercode von Boiler oder
+  # Thermostat (unabhaengig vom Debug-Modus lokal protokolliert, analog zu
+  # ww_v3_sicherheitsabschaltung_maxdauer - ein Geraetefehler ist
+  # sicherheitsrelevant, kein reiner Debug-Hinweis). Die Bedingung
+  # verhindert einen Fehlalarm beim ersten Bekanntwerden der Entity nach
+  # einem HA-Neustart (trigger.from_state waere dann None). Absichtlich
+  # keine Interpretation von sensor.boiler_servicecode/-nummer, da deren
+  # genaue Bedeutung (welcher Wert "Stoerung" vs. "normaler Betrieb"
+  # bedeutet) nicht verifiziert ist - diese werden nur zur Anzeige auf der
+  # Debug-Seite dargestellt.
+  - id: ww_v3_debug_fehlercode_erkannt
+    alias: WW V3 - Debug Neuer Fehlercode
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.boiler_lastcode
+          - sensor.thermostat_lastcode
+    condition:
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_debug_fehlercode_erkannt
+          trigger: "{{ trigger.entity_id }}"
+          decision: Neuer Fehlercode erkannt
+          reason: "{{ trigger.entity_id }}: {{ trigger.to_state.state }}"
+          action: keine automatische Aktion
+          result: Warnung
+          severity: critical
 
   # Neu in v3 (nur moeglich, weil EMS-ESP ein unabhaengiges Hardware-Signal
   # liefert): erkennt, wenn wir eine Ladung angefordert haben, der Boiler

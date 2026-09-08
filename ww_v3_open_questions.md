@@ -101,6 +101,27 @@ neuen Berechnung:
 misst (siehe Geraete & Dienste), da das auf ein Konfigurationsproblem
 ausserhalb dieses Packages hindeuten koennte.
 
+**B7. Bedeutung von `sensor.boiler_servicecode`/`_servicecodenumber` und von
+`sensor.boiler_nrgsupptotal` nicht verifiziert.**
+Beim Nachruesten der Fehlercode-Ueberwachung und der COP-Berechnung wurde
+bewusst darauf verzichtet, diese beiden Werte automatisiert zu
+interpretieren:
+- `sensor.boiler_servicecode`/`_servicecodenumber` (Snapshot: "0H"/203)
+  werden nur zur Anzeige aufgenommen. Ob ein bestimmter Wert "Stoerung" oder
+  "normaler Betrieb" bedeutet, ist aus der CSV nicht ableitbar – die
+  tatsaechliche Fehlererkennung laeuft stattdessen ausschliesslich ueber die
+  eindeutig benannten `sensor.boiler_lastcode`/`_thermostat_lastcode`
+  ("Last error code").
+- `sensor.boiler_nrgsupptotal` (Snapshot: 1552 kWh) hat einen auffaellig
+  identischen Wert wie `sensor.boiler_auxelecheatnrgconstotal` (ebenfalls
+  1552 kWh) – vermutlich zeigt der Name "Total energy supplied" hier nicht
+  das, was der Name vermuten laesst. Die neue COP-Berechnung
+  (`sensor.ww_v3_dhw_cop_lebenszeit`) verwendet diesen Wert daher **nicht**,
+  sondern ausschliesslich die eindeutig DHW-bezogenen Zaehler
+  (`sensor.boiler_dhw_nrgsupp`/`_nrgconscomp`).
+→ Falls gewuenscht: EMS-ESP-Dokumentation/Forum konsultieren, um die
+  genaue Bedeutung dieser beiden Werte zu klaeren, dann ggf. erweitern.
+
 ## Teil C – Aus ww_v2 übernommene, weiterhin offene Punkte
 
 Die Punkte B1–B4 aus `ww_v2_open_questions.md` (veraltete Temperatur als

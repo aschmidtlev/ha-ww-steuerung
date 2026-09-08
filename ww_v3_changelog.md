@@ -66,6 +66,26 @@
   unverifizierte Batterie-Vorzeichenkonvention) siehe
   `ww_v3_open_questions.md`, Punkt B6.
 
+## Nachtrag: drei weitere EMS-ESP-Funktionen integriert (2026-09-08)
+
+- **Neu**: `automation.ww_v3_debug_fehlercode_erkannt` alarmiert (severity
+  critical, unabhaengig vom Debug-Modus lokal protokolliert) bei jeder
+  Aenderung von `sensor.boiler_lastcode`/`sensor.thermostat_lastcode`.
+  `sensor.boiler_servicecode`/`_servicecodenumber` werden bewusst nur zur
+  Anzeige aufgenommen, nicht automatisch interpretiert (Bedeutung der
+  Codes nicht verifiziert, siehe `ww_v3_open_questions.md` Punkt B7).
+- **Neu**: `sensor.ww_v3_dhw_cop_lebenszeit` und `sensor.ww_v3_dhw_
+  zusatzheizung_anteil` berechnen erstmals eine echte Effizienzkennzahl
+  (Lebenszeit-Durchschnitt) aus den EMS-ESP-Energiezaehlern, bewusst nur
+  fuer den DHW-Zweig (nicht ueber das mehrdeutig benannte `sensor.boiler_
+  nrgsupptotal`, siehe Offene Frage B7). Beide neu im Bereich "Effizienz"
+  der Energie-und-PV-Ansicht.
+- **Neu**: Heizkreis hc1 (`climate.thermostat_hc1` und vier zugehoerige
+  Sensoren) ist jetzt rein informativ im Dashboard sichtbar (eigene Karte
+  "Heizkreis hc1"), wird aber weiterhin **nicht** von ww_v3 gesteuert oder
+  in Ladeentscheidungen einbezogen – bleibt ausserhalb des Funktionsumfangs
+  "Warmwassersteuerung".
+
 ## HA-Coding-Standards (Qualitaetsverbesserung, im Rahmen der Migration)
 
 - **Neu**: `entity_category: diagnostic` wurde fuer alle reinen

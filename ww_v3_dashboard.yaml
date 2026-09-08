@@ -346,6 +346,38 @@ views:
           - entity: sensor.ww_v3_wp_energie_monat
             name: WP Energie diesen Monat
 
+      - type: entities
+        title: Effizienz (EMS-ESP, Lebenszeit-Durchschnitt)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_dhw_cop_lebenszeit
+            name: Warmwasser COP (Lebenszeit)
+          - entity: sensor.ww_v3_dhw_zusatzheizung_anteil
+            name: Anteil elektrische Zusatzheizung
+          - entity: sensor.boiler_dhw_nrgsupp
+            name: Warmwasser Energie geliefert (gesamt)
+          - entity: sensor.boiler_dhw_nrgconscomp
+            name: Warmwasser Energie Verdichter (gesamt)
+          - entity: sensor.boiler_dhw_auxelecheatnrgcons
+            name: Warmwasser Energie Zusatzheizung (gesamt)
+
+      - type: entities
+        title: Heizkreis hc1 (nur Anzeige, nicht Teil dieser Steuerung)
+        show_header_toggle: false
+        entities:
+          - entity: climate.thermostat_hc1
+            name: Heizkreis hc1
+          - entity: sensor.thermostat_hc1_modetype
+            name: Modus
+          - entity: sensor.thermostat_hc1_targetflowtemp
+            name: Zielvorlauftemperatur
+          - entity: sensor.thermostat_hc1_hpoperatingstate
+            name: Waermepumpen-Betriebszustand
+          - entity: sensor.thermostat_hc1_curroominfl
+            name: Aktueller Raumeinfluss
+          - entity: sensor.thermostat_hc1_currsolarinfl
+            name: Aktueller Solareinfluss
+
       - type: history-graph
         title: Warmwassertemperatur und Ziele (24h)
         hours_to_show: 24
@@ -580,8 +612,24 @@ views:
           - input_boolean.ww_v3_hygiene_erfolgt
           - input_boolean.ww_v3_debug_mode
           - switch.thermostat_pvenabledhw
+          - sensor.boiler_lastcode
+          - sensor.thermostat_lastcode
 
-      # --- 5.5 Diagnose -------------------------------------------------
+      # --- 5.5 Fehlercodes / Service ---------------------------------
+      - type: entities
+        title: Fehlercodes / Service (EMS-ESP)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.boiler_lastcode
+            name: Boiler letzter Fehlercode
+          - entity: sensor.thermostat_lastcode
+            name: Thermostat letzter Fehlercode
+          - entity: sensor.boiler_servicecode
+            name: Boiler Service-Code
+          - entity: sensor.boiler_servicecodenumber
+            name: Boiler Service-Code (Nummer)
+
+      # --- 5.6 Diagnose -------------------------------------------------
       - type: entities
         title: Diagnose
         show_header_toggle: false
@@ -613,7 +661,7 @@ views:
           - entity: binary_sensor.ww_v3_hygieneziel_ueber_geraetemaximum
             name: Hygieneziel ueber Geraetemaximum
 
-      # --- 5.6 Diagramme --------------------------------------------------
+      # --- 5.7 Diagramme --------------------------------------------------
       - type: history-graph
         title: Warmwassertemperatur und Ladung (24h)
         hours_to_show: 24
