@@ -1,0 +1,1056 @@
+# =============================================================================
+# Home Assistant Package: Warmwassersteuerung V1.8 Full (Tibber-Fix)
+# Leading24 und Next-Best-Start ohne manuelle Entity-ID oder Selbstreferenz
+# Kumulierter WP-Energiezaehler (Riemann) fuer belastbare Kostenrechnung
+# Bosch Waermepumpe + Tibber + Forecast.Solar + EVU + Marstek
+# =============================================================================
+# Ziel:
+# - Komfort sicherstellen
+# - wirtschaftlich zwischen PV, Einspeisung, Tibber und Batterie entscheiden
+# - Verdichterstarts reduzieren
+# - Bedarf und Speicherverluste schrittweise lernen
+# - Entscheidungen transparent und sicher nachvollziehbar machen
+#
+# Wichtige Sicherheitsgrenze:
+# Der optionale Hygienezyklus ist standardmaessig AUS. Er darf nur aktiviert
+# werden, wenn Bosch, Speicher, Rohrnetz und Verbruehschutz vom Fachbetrieb fuer
+# die eingestellte Temperatur freigegeben wurden. Die Funktion ersetzt keine
+# Herstellerfunktion oder fachliche Trinkwasserbewertung.
+# =============================================================================
+
+input_boolean:
+  ww_v18_aktiv:
+    name: WW V1.8 Automatik aktiv
+    icon: mdi:water-boiler-auto
+    initial: true
+  ww_v18_debug:
+    name: WW V1.8 Debug aktiv
+    icon: mdi:bug
+  ww_v18_marstek_nutzen:
+    name: WW V1.8 Marstek beruecksichtigen
+    icon: mdi:battery-sync
+    initial: true
+  ww_v18_pv_vorrang:
+    name: WW V1.8 PV-Vorrang bis Maximaltemperatur
+    icon: mdi:solar-power-variant
+    initial: true
+  ww_v18_hygiene_aktiv:
+    name: WW V1.8 Hygienezyklus freigegeben
+    icon: mdi:shield-check
+    initial: false
+  ww_v18_nachtladung_erfolgt:
+    name: WW V1.8 Nachtladung erfolgt
+    icon: mdi:weather-night
+    initial: false
+  ww_v18_hygiene_erfolgt:
+    name: WW V1.8 Hygienezyklus erfolgt
+    icon: mdi:shield-check
+    initial: false
+
+input_button:
+  ww_v18_debug_test:
+    name: WW V1.8 Pushover-Test
+    icon: mdi:message-alert-outline
+
+input_text:
+  ww_v18_letzter_grund:
+    name: WW V1.8 letzter Ladegrund
+    max: 120
+    icon: mdi:information-outline
+  ww_v18_aktive_strategie:
+    name: WW V1.8 aktive Strategie
+    max: 120
+    icon: mdi:strategy
+  ww_v18_wp_energy_entity:
+    name: WW V1.8 Waermepumpen-Energiezaehler Entity
+    max: 100
+    icon: mdi:lightning-bolt
+    initial: sensor.ww_v1_8_wp_energie_gesamt
+
+input_number:
+  ww_v18_kritisches_minimum:
+    name: WW V1.8 kritisches Minimum
+    min: 35
+    max: 50
+    step: 0.5
+    initial: 44
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_komfort_minimum:
+    name: WW V1.8 Komfortminimum
+    min: 40
+    max: 55
+    step: 0.5
+    initial: 47
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_normalziel:
+    name: WW V1.8 Normalziel
+    min: 45
+    max: 58
+    step: 0.5
+    initial: 51
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_maximaltemperatur:
+    name: WW V1.8 Maximaltemperatur
+    min: 50
+    max: 60
+    step: 0.5
+    initial: 55
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_hygiene_ziel:
+    name: WW V1.8 Hygiene-Zieltemperatur
+    min: 60
+    max: 65
+    step: 0.5
+    initial: 60
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_einspeiseverguetung:
+    name: WW V1.8 Einspeiseverguetung
+    min: 0
+    max: 30
+    step: 0.1
+    initial: 8
+    unit_of_measurement: "ct/kWh"
+    mode: box
+  ww_v18_mindestvorteil:
+    name: WW V1.8 Mindestvorteil Eigenverbrauch
+    min: 0
+    max: 20
+    step: 0.5
+    initial: 3
+    unit_of_measurement: "ct/kWh"
+    mode: box
+  ww_v18_einspeiseschwelle:
+    name: WW V1.8 Mindest-Einspeisung
+    min: 100
+    max: 5000
+    step: 100
+    initial: 1000
+    unit_of_measurement: W
+    mode: box
+  ww_v18_start_hysterese:
+    name: WW V1.8 Start-Hysterese
+    min: 0.5
+    max: 6
+    step: 0.5
+    initial: 2
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_mindestlaufzeit:
+    name: WW V1.8 Mindestlaufzeit
+    min: 0
+    max: 90
+    step: 5
+    initial: 30
+    unit_of_measurement: min
+    mode: box
+  ww_v18_antitakt_sperre:
+    name: WW V1.8 Anti-Takt-Sperre
+    min: 0
+    max: 60
+    step: 5
+    initial: 20
+    unit_of_measurement: min
+    mode: box
+  ww_v18_marstek_freigabe_soc:
+    name: WW V1.8 Marstek Freigabe-SoC
+    min: 20
+    max: 100
+    step: 5
+    initial: 80
+    unit_of_measurement: "%"
+    mode: box
+  ww_v18_marstek_schutz_soc:
+    name: WW V1.8 Marstek Schutz-SoC
+    min: 10
+    max: 90
+    step: 5
+    initial: 50
+    unit_of_measurement: "%"
+    mode: box
+  ww_v18_pv_tag_schwelle:
+    name: WW V1.8 PV-Tag ab Prognose
+    min: 0
+    max: 60
+    step: 1
+    initial: 20
+    unit_of_measurement: kWh
+    mode: box
+  ww_v18_schwache_pv_schwelle:
+    name: WW V1.8 schwache PV-Prognose unter
+    min: 0
+    max: 30
+    step: 1
+    initial: 10
+    unit_of_measurement: kWh
+    mode: box
+  ww_v18_nachtverlust_gelernt:
+    name: WW V1.8 gelernter Nachtverlust
+    min: 0
+    max: 15
+    step: 0.1
+    initial: 4
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_nacht_referenz:
+    name: WW V1.8 Nacht-Referenztemperatur
+    min: 0
+    max: 70
+    step: 0.1
+    initial: 50
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_verbrauch_morgen_gelernt:
+    name: WW V1.8 Verbrauch morgens gelernt
+    min: 0
+    max: 20
+    step: 0.1
+    initial: 4
+    unit_of_measurement: "K"
+    mode: box
+  ww_v18_verbrauch_abend_gelernt:
+    name: WW V1.8 Verbrauch abends gelernt
+    min: 0
+    max: 20
+    step: 0.1
+    initial: 3
+    unit_of_measurement: "K"
+    mode: box
+  ww_v18_verbrauch_referenz:
+    name: WW V1.8 Verbrauchs-Referenz
+    min: 0
+    max: 70
+    step: 0.1
+    initial: 50
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v18_wp_energy_start:
+    name: WW V1.8 WP Energie bei Ladestart
+    min: 0
+    max: 1000000
+    step: 0.001
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+  ww_v18_kosten_heute:
+    name: WW V1.8 Kosten heute
+    min: -100
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: EUR
+    mode: box
+  ww_v18_einsparung_heute:
+    name: WW V1.8 Einsparung heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: EUR
+    mode: box
+  ww_v18_pv_energie_heute:
+    name: WW V1.8 PV-Energie WW heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+  ww_v18_netz_energie_heute:
+    name: WW V1.8 Netz-Energie WW heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+
+input_datetime:
+  ww_v18_letzte_ladung:
+    name: WW V1.8 letzte Ladung
+    has_date: true
+    has_time: true
+  ww_v18_letztes_ladeende:
+    name: WW V1.8 letztes Ladeende
+    has_date: true
+    has_time: true
+  ww_v18_letzter_hygienezyklus:
+    name: WW V1.8 letzter Hygienezyklus
+    has_date: true
+    has_time: true
+
+counter:
+  ww_v18_ladungen_heute:
+    name: WW V1.8 Ladungen heute
+    initial: 0
+    step: 1
+
+sensor:
+  # Kumulierter WP-Energiezaehler aus Momentanleistung sensor.wp_gesamtleistung
+  # Nur noetig, wenn sensor.wp_gesamtleistung eine Leistung (W/kW) und keinen kWh-Zaehler liefert.
+  - platform: integration
+    source: sensor.wp_gesamtleistung
+    name: WW V1.8 WP Energie Gesamt
+    unique_id: ww_v18_wp_energie_gesamt
+    unit_time: h
+    round: 3
+    method: trapezoidal
+
+  - platform: statistics
+    name: WW V1.8 Temperatur Maximum 7 Tage
+    unique_id: ww_v18_temperatur_maximum_7_tage
+    entity_id: sensor.ww_v1_8_warmwassertemperatur
+    state_characteristic: value_max
+    max_age:
+      days: 7
+    sampling_size: 20000
+    precision: 1
+
+template:
+  - binary_sensor:
+      - name: WW V1.8 System aktiv
+        unique_id: ww_v18_system_aktiv
+        state: "{{ is_state('input_boolean.ww_v18_aktiv','on') }}"
+      - name: WW V1.8 Ladung aktiv
+        unique_id: ww_v18_ladung_aktiv
+        device_class: heat
+        state: "{{ is_state('switch.charge','on') }}"
+      - name: WW V1.8 Kritischer Bedarf
+        unique_id: ww_v18_kritischer_bedarf
+        device_class: problem
+        availability: "{{ states('sensor.ww_v1_8_warmwassertemperatur') not in ['unknown','unavailable',''] }}"
+        state: >-
+          {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(99)
+             < states('input_number.ww_v18_kritisches_minimum') | float(44) }}
+      - name: WW V1.8 Komfortbedarf
+        unique_id: ww_v18_komfortbedarf
+        state: >-
+          {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(99)
+             < states('input_number.ww_v18_komfort_minimum') | float(47) }}
+      - name: WW V1.8 Ladebedarf
+        unique_id: ww_v18_ladebedarf
+        state: >-
+          {% set t = states('sensor.ww_v1_8_warmwassertemperatur') | float(99) %}
+          {% set z = states('sensor.ww_v1_8_effektives_ziel') | float(51) %}
+          {% set h = states('input_number.ww_v18_start_hysterese') | float(2) %}
+          {{ t < z - h }}
+      - name: WW V1.8 PV-Ueberschuss
+        unique_id: ww_v18_pv_ueberschuss
+        delay_on: "00:03:00"
+        delay_off: "00:02:00"
+        availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable',''] }}"
+        state: >-
+          {{ states('sensor.evu_leistung') | float(0)
+             <= 0 - states('input_number.ww_v18_einspeiseschwelle') | float(1000) }}
+      - name: WW V1.8 Eigenverbrauch wirtschaftlich
+        unique_id: ww_v18_eigenverbrauch_wirtschaftlich
+        state: >-
+          {{ states('sensor.ww_v1_8_eigenverbrauchsvorteil') | float(-99)
+             >= states('input_number.ww_v18_mindestvorteil') | float(3) }}
+      - name: WW V1.8 Tibber wirtschaftlich
+        unique_id: ww_v18_tibber_wirtschaftlich
+        state: >-
+          {% set aktuell = states('sensor.ww_v1_8_tibber_preis') | float(999) %}
+          {% set avg = states('sensor.ww_v1_8_tibber_leading24') | float(999) %}
+          {{ is_state('binary_sensor.home_bestpreis_zeitraum','on') or aktuell <= avg }}
+      - name: WW V1.8 Marstek verfuegbar
+        unique_id: ww_v18_marstek_verfuegbar
+        device_class: connectivity
+        state: >-
+          {% set s = states('sensor.marstek_venus_modbus_soc_batterie') %}
+          {{ is_state('input_boolean.ww_v18_marstek_nutzen','on')
+             and s not in ['unknown','unavailable',''] }}
+      - name: WW V1.8 Marstek freigegeben
+        unique_id: ww_v18_marstek_freigegeben
+        state: >-
+          {{ is_state('binary_sensor.ww_v1_8_marstek_verfuegbar','on')
+             and states('sensor.marstek_venus_modbus_soc_batterie') | float(0)
+             >= states('input_number.ww_v18_marstek_freigabe_soc') | float(80)
+             and is_state('binary_sensor.ww_v1_8_pv_ueberschuss','on') }}
+      - name: WW V1.8 Antitakt frei
+        unique_id: ww_v18_antitakt_frei
+        state: >-
+          {% set e = states('input_datetime.ww_v18_letztes_ladeende') %}
+          {% set s = states('input_number.ww_v18_antitakt_sperre') | float(20) %}
+          {{ e in ['unknown','unavailable',''] or
+             (now() - as_datetime(e)).total_seconds() / 60 >= s }}
+      - name: WW V1.8 Mindestlaufzeit erreicht
+        unique_id: ww_v18_mindestlaufzeit_erreicht
+        state: >-
+          {% set a = states('input_datetime.ww_v18_letzte_ladung') %}
+          {% set m = states('input_number.ww_v18_mindestlaufzeit') | float(30) %}
+          {{ a in ['unknown','unavailable',''] or
+             (now() - as_datetime(a)).total_seconds() / 60 >= m }}
+      - name: WW V1.8 Nachtladung Status
+        unique_id: ww_v18_nachtladung_status
+        state: "{{ is_state('input_boolean.ww_v18_nachtladung_erfolgt','on') }}"
+      - name: WW V1.8 Hygiene faellig
+        unique_id: ww_v18_hygiene_faellig
+        device_class: problem
+        state: >-
+          {% set max7 = states('sensor.ww_v1_8_temperatur_maximum_7_tage') | float(0) %}
+          {% set ziel = states('input_number.ww_v18_hygiene_ziel') | float(60) %}
+          {{ is_state('input_boolean.ww_v18_hygiene_aktiv','on') and max7 < ziel }}
+
+  - sensor:
+      - name: WW V1.8 Warmwassertemperatur
+        unique_id: ww_v18_warmwassertemperatur
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        availability: >-
+          {{ state_attr('water_heater.dhw1','current_temperature') is not none
+             or states('sensor.hotwater_temp') not in ['unknown','unavailable','']
+             or states('sensor.dhw1_temperature') not in ['unknown','unavailable',''] }}
+        state: >-
+          {% set a = state_attr('water_heater.dhw1','current_temperature') %}
+          {% set b = states('sensor.hotwater_temp') %}
+          {% set c = states('sensor.dhw1_temperature') %}
+          {% if a is not none %}{{ a | float | round(1) }}
+          {% elif b not in ['unknown','unavailable',''] %}{{ b | float | round(1) }}
+          {% else %}{{ c | float | round(1) }}{% endif %}
+        attributes:
+          quelle: >-
+            {% if state_attr('water_heater.dhw1','current_temperature') is not none %}water_heater.dhw1/current_temperature
+            {% elif states('sensor.hotwater_temp') not in ['unknown','unavailable',''] %}sensor.hotwater_temp
+            {% else %}sensor.dhw1_temperature{% endif %}
+      - name: WW V1.8 Tibber Preis
+        unique_id: ww_v18_tibber_preis
+        unit_of_measurement: "ct/kWh"
+        device_class: monetary
+        state_class: measurement
+        availability: "{{ states('sensor.home_aktueller_strompreis') not in ['unknown','unavailable',''] }}"
+        state: "{{ states('sensor.home_aktueller_strompreis') | float(0) | round(3) }}"
+      - name: WW V1.8 Tibber Leading24
+        unique_id: ww_v18_tibber_leading24
+        unit_of_measurement: "ct/kWh"
+        device_class: monetary
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.home_preis_vorlaufend_24h') not in ['unknown','unavailable','']
+             or states('sensor.home_leading_price_average') not in ['unknown','unavailable',''] }}
+        state: >-
+          {% if states('sensor.home_preis_vorlaufend_24h') not in ['unknown','unavailable',''] %}
+            {{ states('sensor.home_preis_vorlaufend_24h') | float(0) | round(3) }}
+          {% else %}
+            {{ states('sensor.home_leading_price_average') | float(0) | round(3) }}
+          {% endif %}
+        attributes:
+          quelle: >-
+            {% if states('sensor.home_preis_vorlaufend_24h') not in ['unknown','unavailable',''] %}sensor.home_preis_vorlaufend_24h
+            {% elif states('sensor.home_leading_price_average') not in ['unknown','unavailable',''] %}sensor.home_leading_price_average
+            {% else %}Tibber-Sensor Preis vorlaufend 24h ist nicht aktiviert{% endif %}
+      - name: WW V1.8 Naechster Bestpreis-Start
+        unique_id: ww_v18_naechster_bestpreis_start
+        icon: mdi:clock-star-four-points
+        state: >-
+          {% set b = 'binary_sensor.home_bestpreis_zeitraum' %}
+          {% set attrs = ['next_start','next_period_start','next_best_period_start','next_best_price_period_start','next_start_time'] %}
+          {% set ns = namespace(value=none) %}
+          {% for a in attrs %}
+            {% if ns.value is none and state_attr(b,a) not in [none,'unknown','unavailable',''] %}{% set ns.value = state_attr(b,a) %}{% endif %}
+          {% endfor %}
+          {% if ns.value is not none %}{{ as_timestamp(ns.value) | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
+          {% elif states('sensor.home_nachster_bestpreis_zeitraum_start') not in ['unknown','unavailable',''] %}{{ states('sensor.home_nachster_bestpreis_zeitraum_start') }}
+          {% elif states('sensor.home_next_best_price_period_start') not in ['unknown','unavailable',''] %}{{ states('sensor.home_next_best_price_period_start') }}
+          {% else %}nicht verfuegbar{% endif %}
+        attributes:
+          quelle: >-
+            {% set b = 'binary_sensor.home_bestpreis_zeitraum' %}
+            {% set attrs = ['next_start','next_period_start','next_best_period_start','next_best_price_period_start','next_start_time'] %}
+            {% set ns = namespace(source='') %}
+            {% for a in attrs %}
+              {% if ns.source == '' and state_attr(b,a) not in [none,'unknown','unavailable',''] %}{% set ns.source = b ~ '/' ~ a %}{% endif %}
+            {% endfor %}
+            {% if ns.source != '' %}{{ ns.source }}
+            {% elif states('sensor.home_nachster_bestpreis_zeitraum_start') not in ['unknown','unavailable',''] %}sensor.home_nachster_bestpreis_zeitraum_start
+            {% elif states('sensor.home_next_best_price_period_start') not in ['unknown','unavailable',''] %}sensor.home_next_best_price_period_start
+            {% else %}nicht verfuegbar{% endif %}
+      - name: WW V1.8 Eigenverbrauchsvorteil
+        unique_id: ww_v18_eigenverbrauchsvorteil
+        unit_of_measurement: "ct/kWh"
+        state_class: measurement
+        state: >-
+          {{ (states('sensor.ww_v1_8_tibber_preis') | float(0)
+              - states('input_number.ww_v18_einspeiseverguetung') | float(8)) | round(2) }}
+      - name: WW V1.8 Marstek Stufe
+        unique_id: ww_v18_marstek_stufe
+        state: >-
+          {% set s = states('sensor.marstek_venus_modbus_soc_batterie') | float(-1) %}
+          {% set f = states('input_number.ww_v18_marstek_freigabe_soc') | float(80) %}
+          {% set g = states('input_number.ww_v18_marstek_schutz_soc') | float(50) %}
+          {% if not is_state('binary_sensor.ww_v1_8_marstek_verfuegbar','on') %}offline
+          {% elif s >= f %}Freigabe
+          {% elif s >= g %}Eingeschraenkt
+          {% else %}Schutz{% endif %}
+      - name: WW V1.8 Verbrauchsprognose
+        unique_id: ww_v18_verbrauchsprognose
+        unit_of_measurement: K
+        state_class: measurement
+        state: >-
+          {% if now().hour < 12 %}
+            {{ states('input_number.ww_v18_verbrauch_morgen_gelernt') | float(4) }}
+          {% else %}
+            {{ states('input_number.ww_v18_verbrauch_abend_gelernt') | float(3) }}
+          {% endif %}
+        attributes:
+          zeitraum: "{{ 'Morgen' if now().hour < 12 else 'Abend' }}"
+      - name: WW V1.8 Dynamisches Ziel
+        unique_id: ww_v18_dynamisches_ziel
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >-
+          {% set normal = states('input_number.ww_v18_normalziel') | float(51) %}
+          {% set komfort = states('input_number.ww_v18_komfort_minimum') | float(47) %}
+          {% set maximum = states('input_number.ww_v18_maximaltemperatur') | float(55) %}
+          {% set verlust = states('input_number.ww_v18_nachtverlust_gelernt') | float(4) %}
+          {% set bedarf = states('sensor.ww_v1_8_verbrauchsprognose') | float(4) %}
+          {% set pv_m = states('sensor.energy_production_tomorrow') | float(-1) %}
+          {% set pv_schwach = states('input_number.ww_v18_schwache_pv_schwelle') | float(10) %}
+          {% set pv_gut = states('input_number.ww_v18_pv_tag_schwelle') | float(20) %}
+          {% set n = namespace(z=normal) %}
+          {% if komfort + verlust + bedarf * 0.35 > n.z %}{% set n.z = komfort + verlust + bedarf * 0.35 %}{% endif %}
+          {% if pv_m >= 0 and pv_m < pv_schwach %}{% set n.z = n.z + 1.5 %}
+          {% elif pv_m >= pv_gut * 1.5 %}{% set n.z = n.z - 1 %}{% endif %}
+          {% set z = [[n.z, komfort] | max, maximum] | min %}
+          {{ (z * 2) | round(0) / 2 }}
+        attributes:
+          begruendung: >-
+            gelernter Nachtverlust={{ states('input_number.ww_v18_nachtverlust_gelernt') }}K;
+            Verbrauchsprognose={{ states('sensor.ww_v1_8_verbrauchsprognose') }}K;
+            PV morgen={{ states('sensor.energy_production_tomorrow') }}kWh
+      - name: WW V1.8 Effektives Ziel
+        unique_id: ww_v18_effektives_ziel
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >-
+          {% if is_state('input_boolean.ww_v18_pv_vorrang','on')
+                and is_state('binary_sensor.ww_v1_8_pv_ueberschuss','on')
+                and is_state('binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich','on') %}
+            {{ states('input_number.ww_v18_maximaltemperatur') | float(55) }}
+          {% else %}
+            {{ states('sensor.ww_v1_8_dynamisches_ziel') | float(51) }}
+          {% endif %}
+        attributes:
+          modus: >-
+            {% if is_state('binary_sensor.ww_v1_8_pv_ueberschuss','on')
+                  and is_state('binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich','on') %}PV-Waermespeicher
+            {% else %}dynamisch{% endif %}
+      - name: WW V1.8 Aktive Strategie
+        unique_id: ww_v18_aktive_strategie
+        state: >-
+          {% if not is_state('input_boolean.ww_v18_aktiv','on') %}Deaktiviert
+          {% elif is_state('binary_sensor.ww_v1_8_kritischer_bedarf','on') %}P0 Kritischer Schutz
+          {% elif is_state('switch.charge','on') %}{{ states('input_text.ww_v18_aktive_strategie') }}
+          {% elif is_state('binary_sensor.ww_v1_8_ladebedarf','on') %}Warten auf wirtschaftliches Fenster
+          {% else %}Bereitschaft{% endif %}
+      - name: WW V1.8 Naechste Ladung
+        unique_id: ww_v18_naechste_ladung
+        state: >-
+          {% if not is_state('input_boolean.ww_v18_aktiv','on') %}Optimierung aus
+          {% elif is_state('switch.charge','on') %}laeuft gerade
+          {% elif not is_state('binary_sensor.ww_v1_8_ladebedarf','on') %}nicht erforderlich
+          {% elif is_state('binary_sensor.ww_v1_8_kritischer_bedarf','on') %}sofort
+          {% elif is_state('binary_sensor.ww_v1_8_pv_ueberschuss','on') and is_state('binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich','on') %}jetzt: PV
+          {% elif is_state('binary_sensor.ww_v1_8_tibber_wirtschaftlich','on') %}jetzt: Tibber
+          {% elif states('sensor.ww_v1_8_naechster_bestpreis_start') not in ['unknown','unavailable','nicht verfuegbar',''] %}{{ states('sensor.ww_v1_8_naechster_bestpreis_start') }}
+          {% else %}spaetestens 04:00 Uhr{% endif %}
+      - name: WW V1.8 Ampel
+        unique_id: ww_v18_ampel
+        state: >-
+          {% if states('sensor.ww_v1_8_warmwassertemperatur') in ['unknown','unavailable','']
+                or is_state('binary_sensor.ww_v1_8_kritischer_bedarf','on') %}rot
+          {% elif states('sensor.ww_v1_8_tibber_preis') in ['unknown','unavailable','']
+                or states('sensor.energy_production_today') in ['unknown','unavailable','']
+                or not is_state('input_boolean.ww_v18_aktiv','on') %}orange
+          {% else %}gruen{% endif %}
+        attributes:
+          klartext: >-
+            {% if states('sensor.ww_v1_8_warmwassertemperatur') in ['unknown','unavailable',''] %}Bosch-Temperatur fehlt
+            {% elif is_state('binary_sensor.ww_v1_8_kritischer_bedarf','on') %}kritisches Minimum unterschritten
+            {% elif not is_state('input_boolean.ww_v18_aktiv','on') %}Optimierung deaktiviert
+            {% elif states('sensor.ww_v1_8_tibber_preis') in ['unknown','unavailable',''] %}Tibber fehlt
+            {% elif states('sensor.energy_production_today') in ['unknown','unavailable',''] %}PV-Prognose fehlt
+            {% else %}alle Kernfunktionen verfuegbar{% endif %}
+      - name: WW V1.8 Kostenstatus
+        unique_id: ww_v18_kostenstatus
+        state: "{{ states('input_number.ww_v18_kosten_heute') | float(0) | round(2) }} EUR heute"
+        attributes:
+          einsparung_eur: "{{ states('input_number.ww_v18_einsparung_heute') }}"
+          pv_energie_kwh: "{{ states('input_number.ww_v18_pv_energie_heute') }}"
+          netz_energie_kwh: "{{ states('input_number.ww_v18_netz_energie_heute') }}"
+          einspeiseverguetung_ct: "{{ states('input_number.ww_v18_einspeiseverguetung') }}"
+          energiezaehler_konfiguriert: >-
+            {% set e = states('input_text.ww_v18_wp_energy_entity') %}
+            {{ e not in ['unknown','unavailable',''] and states(e) not in ['unknown','unavailable',''] }}
+
+script:
+  ww_v18_ladung_starten:
+    alias: WW V1.8 Ladung starten
+    mode: single
+    fields:
+      grund:
+        description: Ladegrund
+      hygiene:
+        description: Hygieneziel verwenden
+        default: false
+    variables:
+      grund_text: "{{ grund | default('Unbekannt') }}"
+      hygiene_modus: "{{ hygiene | default(false) }}"
+      ziel: >-
+        {{ states('input_number.ww_v18_hygiene_ziel') | float(60)
+           if hygiene_modus else states('sensor.ww_v1_8_effektives_ziel') | float(51) }}
+      neustart: "{{ is_state('switch.charge','off') }}"
+      energy_entity: "{{ states('input_text.ww_v18_wp_energy_entity') }}"
+    sequence:
+      - condition: state
+        entity_id: input_boolean.ww_v18_aktiv
+        state: "on"
+      - service: number.set_value
+        target:
+          entity_id: number.charge_setpoint
+        data:
+          value: "{{ ziel }}"
+      - service: number.set_value
+        target:
+          entity_id: number.charge_duration
+        data:
+          value: 180
+      - service: switch.turn_on
+        target:
+          entity_id: switch.charge
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v18_letzter_grund
+        data:
+          value: "{{ grund_text }} (Ziel {{ ziel }}C)"
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v18_aktive_strategie
+        data:
+          value: "{{ grund_text }}"
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v18_letzte_ladung
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - if:
+          - condition: template
+            value_template: "{{ energy_entity not in ['unknown','unavailable',''] and states(energy_entity) not in ['unknown','unavailable',''] }}"
+        then:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.ww_v18_wp_energy_start
+            data:
+              value: "{{ states(energy_entity) | float(0) }}"
+      - if:
+          - condition: template
+            value_template: "{{ neustart }}"
+        then:
+          - service: counter.increment
+            target:
+              entity_id: counter.ww_v18_ladungen_heute
+
+automation:
+  - id: ww_v18_p0_kritisch
+    alias: WW V1.8 - P0 Kritischer Schutz
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ww_v1_8_kritischer_bedarf
+        to: "on"
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_kritischer_bedarf
+        state: "on"
+      - condition: state
+        entity_id: switch.charge
+        state: "off"
+    action:
+      - service: script.ww_v18_ladung_starten
+        data:
+          grund: P0 Kritischer Schutz
+
+  - id: ww_v18_wirtschaftliche_ladung
+    alias: WW V1.8 - Wirtschaftliche Ladeentscheidung
+    mode: single
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.ww_v1_8_pv_ueberschuss
+          - binary_sensor.home_bestpreis_zeitraum
+          - binary_sensor.ww_v1_8_ladebedarf
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_ladebedarf
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_antitakt_frei
+        state: "on"
+      - condition: state
+        entity_id: switch.charge
+        state: "off"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ww_v1_8_pv_ueberschuss
+                state: "on"
+              - condition: state
+                entity_id: binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich
+                state: "on"
+            sequence:
+              - service: script.ww_v18_ladung_starten
+                data:
+                  grund: P2 PV wirtschaftlich
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ww_v1_8_tibber_wirtschaftlich
+                state: "on"
+            sequence:
+              - service: script.ww_v18_ladung_starten
+                data:
+                  grund: P3 Tibber Leading24
+
+  - id: ww_v18_nachtgarantie
+    alias: WW V1.8 - Nachtgarantie 04:00
+    mode: single
+    trigger:
+      - platform: time
+        at: "04:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_komfortbedarf
+        state: "on"
+    action:
+      - service: script.ww_v18_ladung_starten
+        data:
+          grund: P4 Nachtgarantie 04:00
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ww_v18_nachtladung_erfolgt
+
+  - id: ww_v18_stop_ziel
+    alias: WW V1.8 - Stop am effektiven Ziel
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >-
+          {% set hygiene_laeuft = 'Hygiene' in states('input_text.ww_v18_aktive_strategie') %}
+          {% set ziel = states('input_number.ww_v18_hygiene_ziel') | float(60)
+             if hygiene_laeuft else states('sensor.ww_v1_8_effektives_ziel') | float(51) %}
+          {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(0) >= ziel }}
+      - platform: time_pattern
+        minutes: "/2"
+    condition:
+      - condition: state
+        entity_id: switch.charge
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_mindestlaufzeit_erreicht
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set hygiene_laeuft = 'Hygiene' in states('input_text.ww_v18_aktive_strategie') %}
+          {% set ziel = states('input_number.ww_v18_hygiene_ziel') | float(60)
+             if hygiene_laeuft else states('sensor.ww_v1_8_effektives_ziel') | float(51) %}
+          {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(0) >= ziel }}
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.charge
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v18_letztes_ladeende
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  - id: ww_v18_hygiene_pruefung
+    alias: WW V1.8 - Optionaler Hygienezyklus
+    mode: single
+    trigger:
+      - platform: time
+        at: "02:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - sun
+      - condition: state
+        entity_id: input_boolean.ww_v18_hygiene_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v1_8_hygiene_faellig
+        state: "on"
+      - condition: template
+        value_template: >-
+          {{ states('input_number.ww_v18_hygiene_ziel') | float(60)
+             <= state_attr('number.charge_setpoint','max') | float(60) }}
+    action:
+      - service: script.ww_v18_ladung_starten
+        data:
+          grund: P5 Optionaler Hygienezyklus
+          hygiene: true
+      - wait_template: >-
+          {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(0)
+             >= states('input_number.ww_v18_hygiene_ziel') | float(60) }}
+        timeout: "02:30:00"
+        continue_on_timeout: true
+      - service: switch.turn_off
+        target:
+          entity_id: switch.charge
+      - if:
+          - condition: template
+            value_template: >-
+              {{ states('sensor.ww_v1_8_warmwassertemperatur') | float(0)
+                 >= states('input_number.ww_v18_hygiene_ziel') | float(60) }}
+        then:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v18_letzter_hygienezyklus
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ww_v18_hygiene_erfolgt
+
+  - id: ww_v18_lernen_nacht_snapshot
+    alias: WW V1.8 - Nacht-Referenz 22:00
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_nacht_referenz
+        data:
+          value: "{{ states('sensor.ww_v1_8_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v18_lernen_nacht
+    alias: WW V1.8 - Nachtverlust lernen 05:25
+    trigger:
+      - platform: time
+        at: "05:25:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_nachtladung_erfolgt
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v18_nachtverlust_gelernt') | float(4) }}"
+          neu: >-
+            {{ [states('input_number.ww_v18_nacht_referenz') | float(50)
+                - states('sensor.ww_v1_8_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_nachtverlust_gelernt
+        data:
+          value: "{{ (alt * 0.7 + neu * 0.3) | round(1) }}"
+
+  - id: ww_v18_verbrauch_snapshot_morgen
+    alias: WW V1.8 - Verbrauch Morgen Snapshot 05:30
+    trigger:
+      - platform: time
+        at: "05:30:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_verbrauch_referenz
+        data:
+          value: "{{ states('sensor.ww_v1_8_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v18_verbrauch_lernen_morgen
+    alias: WW V1.8 - Verbrauch Morgen lernen 09:00
+    trigger:
+      - platform: time
+        at: "09:00:00"
+    condition:
+      - condition: state
+        entity_id: switch.charge
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v18_verbrauch_morgen_gelernt') | float(4) }}"
+          neu: >-
+            {{ [states('input_number.ww_v18_verbrauch_referenz') | float(50)
+                - states('sensor.ww_v1_8_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_verbrauch_morgen_gelernt
+        data:
+          value: "{{ (alt * 0.75 + neu * 0.25) | round(1) }}"
+
+  - id: ww_v18_verbrauch_snapshot_abend
+    alias: WW V1.8 - Verbrauch Abend Snapshot 17:00
+    trigger:
+      - platform: time
+        at: "17:00:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_verbrauch_referenz
+        data:
+          value: "{{ states('sensor.ww_v1_8_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v18_verbrauch_lernen_abend
+    alias: WW V1.8 - Verbrauch Abend lernen 21:00
+    trigger:
+      - platform: time
+        at: "21:00:00"
+    condition:
+      - condition: state
+        entity_id: switch.charge
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v18_verbrauch_abend_gelernt') | float(3) }}"
+          neu: >-
+            {{ [states('input_number.ww_v18_verbrauch_referenz') | float(50)
+                - states('sensor.ww_v1_8_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_verbrauch_abend_gelernt
+        data:
+          value: "{{ (alt * 0.75 + neu * 0.25) | round(1) }}"
+
+  - id: ww_v18_kostenabschluss
+    alias: WW V1.8 - Kosten und Energie erfassen
+    trigger:
+      - platform: state
+        entity_id: switch.charge
+        from: "on"
+        to: "off"
+    variables:
+      e: "{{ states('input_text.ww_v18_wp_energy_entity') }}"
+      start: "{{ states('input_number.ww_v18_wp_energy_start') | float(0) }}"
+      ende: "{{ states(e) | float(0) if e not in ['unknown','unavailable',''] else 0 }}"
+      verbrauch: "{{ [ende - start, 0] | max }}"
+      pv: "{{ 'PV' in states('input_text.ww_v18_letzter_grund') }}"
+      preis_eur: "{{ states('sensor.ww_v1_8_tibber_preis') | float(0) / 100 }}"
+      einspeise_eur: "{{ states('input_number.ww_v18_einspeiseverguetung') | float(8) / 100 }}"
+    condition:
+      - condition: template
+        value_template: "{{ e not in ['unknown','unavailable',''] and verbrauch | float(0) > 0 }}"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_kosten_heute
+        data:
+          value: >-
+            {{ (states('input_number.ww_v18_kosten_heute') | float(0)
+                + verbrauch * (einspeise_eur if pv else preis_eur)) | round(2) }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v18_einsparung_heute
+        data:
+          value: >-
+            {{ (states('input_number.ww_v18_einsparung_heute') | float(0)
+                + (verbrauch | float(0)) * ([preis_eur - einspeise_eur, 0] | max if pv else 0)) | round(2) }}
+      - choose:
+          - conditions: "{{ pv }}"
+            sequence:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.ww_v18_pv_energie_heute
+                data:
+                  value: >-
+                    {{ (states('input_number.ww_v18_pv_energie_heute') | float(0) + verbrauch) | round(2) }}
+        default:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.ww_v18_netz_energie_heute
+            data:
+              value: >-
+                {{ (states('input_number.ww_v18_netz_energie_heute') | float(0) + verbrauch) | round(2) }}
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v18_letztes_ladeende
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  - id: ww_v18_debug_strategiewechsel
+    alias: WW V1.8 - Debug Strategiewechsel
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: sensor.ww_v1_8_aktive_strategie
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_debug
+        state: "on"
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: notify.pushover
+        data:
+          title: WW V1.8 Strategiewechsel
+          message: >-
+            {{ trigger.from_state.state }} -> {{ trigger.to_state.state }};
+            WW {{ states('sensor.ww_v1_8_warmwassertemperatur') }}C;
+            Ziel {{ states('sensor.ww_v1_8_effektives_ziel') }}C;
+            naechste Ladung {{ states('sensor.ww_v1_8_naechste_ladung') }}
+
+  - id: ww_v18_debug_sensorfehler
+    alias: WW V1.8 - Debug Sensorausfall
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.ww_v1_8_warmwassertemperatur
+          - sensor.ww_v1_8_tibber_preis
+          - sensor.energy_production_today
+        to:
+          - unknown
+          - unavailable
+        for: "00:05:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v18_debug
+        state: "on"
+    action:
+      - service: notify.pushover
+        data:
+          title: WW V1.8 Sensorausfall
+          message: "{{ trigger.entity_id }} ist seit mehr als 5 Minuten nicht verfuegbar."
+
+  - id: ww_v18_reset
+    alias: WW V1.8 - Tagesreset
+    trigger:
+      - platform: time
+        at: "00:00:05"
+    action:
+      - service: counter.reset
+        target:
+          entity_id: counter.ww_v18_ladungen_heute
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.ww_v18_nachtladung_erfolgt
+            - input_boolean.ww_v18_hygiene_erfolgt
+      - service: input_number.set_value
+        target:
+          entity_id:
+            - input_number.ww_v18_kosten_heute
+            - input_number.ww_v18_einsparung_heute
+            - input_number.ww_v18_pv_energie_heute
+            - input_number.ww_v18_netz_energie_heute
+        data:
+          value: 0

@@ -1,0 +1,275 @@
+title: Warmwassersteuerung V1.8
+views:
+  - title: Uebersicht
+    path: warmwasser
+    icon: mdi:water-boiler
+    type: masonry
+    badges:
+      - entity: binary_sensor.ww_v1_8_system_aktiv
+        name: Automatik
+      - entity: binary_sensor.ww_v1_8_ladung_aktiv
+        name: Ladung
+      - entity: binary_sensor.ww_v1_8_pv_ueberschuss
+        name: PV
+      - entity: binary_sensor.home_bestpreis_zeitraum
+        name: Tibber
+      - entity: binary_sensor.ww_v1_8_marstek_verfuegbar
+        name: Speicher
+    cards:
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v1_8_ampel
+            state: rot
+        card:
+          type: markdown
+          content: >-
+            # ROT
+            {{ state_attr('sensor.ww_v1_8_ampel','klartext') }}
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v1_8_ampel
+            state: orange
+        card:
+          type: markdown
+          content: >-
+            ## ORANGE
+            {{ state_attr('sensor.ww_v1_8_ampel','klartext') }}
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v1_8_ampel
+            state: gruen
+        card:
+          type: markdown
+          content: >-
+            ## GRUEN
+            {{ state_attr('sensor.ww_v1_8_ampel','klartext') }}
+
+      - type: entities
+        title: Bedienung
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ww_v18_aktiv
+            name: Optimierung aktiv
+          - entity: input_boolean.ww_v18_pv_vorrang
+            name: PV-Vorrang
+          - entity: input_boolean.ww_v18_marstek_nutzen
+            name: Marstek beruecksichtigen
+          - entity: input_boolean.ww_v18_debug
+            name: Debug
+          - entity: input_boolean.ww_v18_hygiene_aktiv
+            name: Hygienezyklus freigegeben
+
+      - type: entities
+        title: Aktueller Plan
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v1_8_aktive_strategie
+            name: Aktive Strategie
+          - entity: sensor.ww_v1_8_naechste_ladung
+            name: Naechste geplante Ladung
+          - entity: sensor.ww_v1_8_warmwassertemperatur
+            name: Isttemperatur
+          - entity: sensor.ww_v1_8_dynamisches_ziel
+            name: Dynamisches Ziel
+          - entity: sensor.ww_v1_8_effektives_ziel
+            name: Effektives Ziel
+          - type: attribute
+            entity: sensor.ww_v1_8_dynamisches_ziel
+            attribute: begruendung
+            name: Begruendung
+
+      - type: gauge
+        entity: sensor.ww_v1_8_warmwassertemperatur
+        name: Warmwassertemperatur
+        min: 20
+        max: 65
+        needle: true
+        severity:
+          red: 20
+          yellow: 44
+          green: 47
+
+      - type: entities
+        title: Schutz und Effizienz
+        show_header_toggle: false
+        entities:
+          - entity: input_number.ww_v18_kritisches_minimum
+            name: Kritisches Minimum
+          - entity: input_number.ww_v18_komfort_minimum
+            name: Komfortminimum
+          - entity: input_number.ww_v18_normalziel
+            name: Normalziel
+          - entity: input_number.ww_v18_maximaltemperatur
+            name: Maximaltemperatur
+          - entity: input_number.ww_v18_start_hysterese
+            name: Start-Hysterese
+          - entity: input_number.ww_v18_mindestlaufzeit
+            name: Mindestlaufzeit
+          - entity: input_number.ww_v18_antitakt_sperre
+            name: Anti-Takt-Sperre
+
+      - type: entities
+        title: Wirtschaftlichkeit
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v1_8_tibber_preis
+            name: Tibber aktuell
+          - entity: sensor.ww_v1_8_tibber_leading24
+            name: Tibber Leading 24h
+          - entity: sensor.ww_v1_8_naechster_bestpreis_start
+            name: Naechster Bestpreis-Start
+          - entity: input_number.ww_v18_einspeiseverguetung
+            name: Einspeiseverguetung
+          - entity: sensor.ww_v1_8_eigenverbrauchsvorteil
+            name: Eigenverbrauchsvorteil
+          - entity: binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich
+            name: PV-Eigenverbrauch wirtschaftlich
+          - entity: sensor.ww_v1_8_kostenstatus
+            name: Kostenstatus heute
+          - type: attribute
+            entity: sensor.ww_v1_8_kostenstatus
+            attribute: einsparung_eur
+            name: Einsparung heute
+          - type: attribute
+            entity: sensor.ww_v1_8_kostenstatus
+            attribute: pv_energie_kwh
+            name: PV-Energie WW heute
+          - type: attribute
+            entity: sensor.ww_v1_8_kostenstatus
+            attribute: netz_energie_kwh
+            name: Netzenergie WW heute
+          - type: attribute
+            entity: sensor.ww_v1_8_kostenstatus
+            attribute: energiezaehler_konfiguriert
+            name: Energiezaehler funktionsfaehig
+          - entity: sensor.ww_v1_8_wp_energie_gesamt
+            name: WP Energie gesamt
+
+      - type: entities
+        title: Lernen und Prognose
+        show_header_toggle: false
+        entities:
+          - entity: input_number.ww_v18_nachtverlust_gelernt
+            name: Gelernter Nachtverlust
+          - entity: input_number.ww_v18_verbrauch_morgen_gelernt
+            name: Gelernter Morgenverbrauch
+          - entity: input_number.ww_v18_verbrauch_abend_gelernt
+            name: Gelernter Abendverbrauch
+          - entity: sensor.ww_v1_8_verbrauchsprognose
+            name: Aktuelle Verbrauchsprognose
+          - entity: sensor.energy_production_today
+            name: PV-Prognose heute
+          - entity: sensor.energy_production_tomorrow
+            name: PV-Prognose morgen
+
+      - type: entities
+        title: Marstek
+        show_header_toggle: false
+        entities:
+          - entity: sensor.marstek_venus_modbus_soc_batterie
+            name: SoC
+          - entity: sensor.ww_v1_8_marstek_stufe
+            name: Stufe
+          - entity: input_number.ww_v18_marstek_freigabe_soc
+            name: Freigabe-SoC
+          - entity: input_number.ww_v18_marstek_schutz_soc
+            name: Schutz-SoC
+          - entity: binary_sensor.ww_v1_8_marstek_freigegeben
+            name: WW-Freigabe
+
+      - type: entities
+        title: Hygiene-Monitoring
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ww_v18_hygiene_aktiv
+            name: Automatik freigegeben
+          - entity: input_number.ww_v18_hygiene_ziel
+            name: Zieltemperatur
+          - entity: sensor.ww_v1_8_temperatur_maximum_7_tage
+            name: Maximum letzte 7 Tage
+          - entity: binary_sensor.ww_v1_8_hygiene_faellig
+            name: Zyklus faellig
+          - entity: input_datetime.ww_v18_letzter_hygienezyklus
+            name: Letzter erfolgreicher Zyklus
+
+      - type: history-graph
+        title: Temperatur und Ziele 24h
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v1_8_warmwassertemperatur
+          - sensor.ww_v1_8_dynamisches_ziel
+          - sensor.ww_v1_8_effektives_ziel
+
+      - type: history-graph
+        title: Preis und Ladefenster 24h
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v1_8_tibber_preis
+          - sensor.ww_v1_8_tibber_leading24
+          - binary_sensor.home_bestpreis_zeitraum
+          - binary_sensor.ww_v1_8_ladung_aktiv
+
+  - title: Diagnose
+    path: diagnose
+    icon: mdi:stethoscope
+    type: masonry
+    cards:
+      - type: entities
+        title: Datenquellen und Konfiguration
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v1_8_ampel
+            name: Ampel
+          - type: attribute
+            entity: sensor.ww_v1_8_ampel
+            attribute: klartext
+            name: Klartext
+          - entity: input_text.ww_v18_tibber_leading24_entity
+            name: Tibber Leading24 Entity-ID
+          - entity: input_text.ww_v18_tibber_next_best_start_entity
+            name: Tibber Next-Best-Start Entity-ID
+          - entity: input_text.ww_v18_wp_energy_entity
+            name: Waermepumpen-Energiezaehler Entity-ID
+          - entity: sensor.ww_v1_8_warmwassertemperatur
+            name: Temperatur
+          - type: attribute
+            entity: sensor.ww_v1_8_warmwassertemperatur
+            attribute: quelle
+            name: Temperaturquelle
+          - entity: sensor.ww_v1_8_tibber_preis
+            name: Tibber aktuell
+          - entity: sensor.evu_leistung
+            name: EVU-Leistung
+
+      - type: entities
+        title: Entscheidungslogik
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.ww_v1_8_kritischer_bedarf
+            name: Kritischer Bedarf
+          - entity: binary_sensor.ww_v1_8_komfortbedarf
+            name: Komfortbedarf
+          - entity: binary_sensor.ww_v1_8_ladebedarf
+            name: Ladebedarf
+          - entity: binary_sensor.ww_v1_8_pv_ueberschuss
+            name: PV-Ueberschuss
+          - entity: binary_sensor.ww_v1_8_eigenverbrauch_wirtschaftlich
+            name: Eigenverbrauch wirtschaftlich
+          - entity: binary_sensor.ww_v1_8_tibber_wirtschaftlich
+            name: Tibber wirtschaftlich
+          - entity: binary_sensor.ww_v1_8_antitakt_frei
+            name: Anti-Takt frei
+          - entity: binary_sensor.ww_v1_8_mindestlaufzeit_erreicht
+            name: Mindestlaufzeit erreicht
+          - entity: sensor.ww_v1_8_aktive_strategie
+            name: Aktive Strategie
+
+      - type: logbook
+        title: Steuerungsereignisse
+        hours_to_show: 24
+        entities:
+          - switch.charge
+          - binary_sensor.ww_v1_8_kritischer_bedarf
+          - binary_sensor.ww_v1_8_pv_ueberschuss
+          - binary_sensor.home_bestpreis_zeitraum
+          - input_boolean.ww_v18_hygiene_erfolgt

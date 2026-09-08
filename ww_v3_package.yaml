@@ -1,0 +1,1917 @@
+# =============================================================================
+# Home Assistant Package: Warmwassersteuerung ww_v3
+# Migration von ww_v2 (Bosch-Cloud-Anbindung water_heater.dhw1/switch.charge)
+# auf die lokale EMS-ESP-Gateway-Anbindung. Siehe ww_v3_analysis.md,
+# ww_v3_migration_concept.md, ww_v3_entity_mapping.md und ww_v3_function_matrix.md
+# fuer die vollstaendige Begruendung jeder Aenderung. Alle Migrationsentscheidungen
+# wurden vom Anwender bestaetigt (siehe ww_v3_open_questions.md Teil A).
+#
+# WICHTIGSTE AENDERUNG GEGENUEBER v2:
+# - water_heater.dhw1 (Bosch Home Connect Cloud) wird NICHT MEHR referenziert.
+# - switch.charge / number.charge_setpoint / number.charge_duration (Bosch
+#   Cloud) werden NICHT MEHR referenziert.
+# - Einzige Quelle fuer Warmwasser-Ist-Temperatur und Ladesteuerung ist jetzt
+#   das lokale EMS-ESP-Gateway (sensor.boiler_dhw_curtemp,
+#   switch.boiler_dhw_onetime, number.boiler_dhw_seltempsingle).
+# - Das native EMS-ESP-Feature "PV laedt Warmwasser auf"
+#   (switch.thermostat_pvenabledhw) wird von ww_v3 aktiv deaktiviert gehalten,
+#   damit ausschliesslich ww_v3 ueber Ladeentscheidungen bestimmt (keine
+#   doppelte, unkoordinierte Steuerung).
+#
+# Ziel (unveraendert gegenueber v2):
+# - Komfort und Sicherheit sicherstellen
+# - PV-Ueberschuss zweier Anlagen (Ost/West), Tibber-Preis und Batteriespeicher
+#   wirtschaftlich nutzen
+# - Verdichterstarts reduzieren (Anti-Takt, Mindestlaufzeit)
+# - Jede Entscheidung nachvollziehbar protokollieren (zentrales Debug-/
+#   Pushover-System, per input_boolean.ww_v3_debug_mode schaltbar)
+#
+# Wichtige Sicherheitsgrenze:
+# Der optionale Hygienezyklus ist standardmaessig AUS. Er darf nur aktiviert
+# werden, wenn Speicher, Rohrnetz und Verbruehschutz vom Fachbetrieb fuer die
+# eingestellte Temperatur freigegeben wurden. Die Funktion ersetzt keine
+# Herstellerfunktion oder fachliche Trinkwasserbewertung. Zusaetzlich prueft
+# v3 vor jedem Ladevorgang, ob number.boiler_dhw_maxtemp (Geraete-eigenes
+# Maximum) das gewuenschte Ziel ueberhaupt zulaesst (siehe script
+# ww_v3_ladung_starten) - das war in v2 unverifiziert (siehe
+# ww_v2_open_questions.md).
+# =============================================================================
+
+input_boolean:
+  ww_v3_aktiv:
+    name: WW V3 Automatik aktiv
+    icon: mdi:water-boiler-auto
+    initial: true
+  ww_v3_debug_mode:
+    name: WW V3 Debug-Modus
+    icon: mdi:bug
+    initial: false
+  ww_v3_marstek_nutzen:
+    name: WW V3 Marstek beruecksichtigen
+    icon: mdi:battery-sync
+    initial: true
+  ww_v3_pv_vorrang:
+    name: WW V3 PV-Vorrang bis Maximaltemperatur
+    icon: mdi:solar-power-variant
+    initial: true
+  ww_v3_hygiene_aktiv:
+    name: WW V3 Hygienezyklus freigegeben
+    icon: mdi:shield-check
+    initial: false
+  ww_v3_nachtladung_erfolgt:
+    name: WW V3 Nachtladung erfolgt
+    icon: mdi:weather-night
+    initial: false
+  ww_v3_hygiene_erfolgt:
+    name: WW V3 Hygienezyklus erfolgt
+    icon: mdi:shield-check
+    initial: false
+
+input_button:
+  ww_v3_debug_test:
+    name: WW V3 Pushover-Test
+    icon: mdi:message-alert-outline
+
+input_text:
+  ww_v3_letzter_grund:
+    name: WW V3 letzter Ladegrund
+    max: 120
+    icon: mdi:information-outline
+  ww_v3_aktive_strategie:
+    name: WW V3 aktive Strategie (roh)
+    max: 120
+    icon: mdi:strategy
+  ww_v3_wp_energy_entity:
+    name: WW V3 Waermepumpen-Energiezaehler Entity
+    max: 100
+    icon: mdi:lightning-bolt
+    initial: sensor.ww_v3_wp_energie_gesamt
+  ww_v3_letzte_debug_nachricht:
+    name: WW V3 letzte Debug-Nachricht (Signatur, Dedup)
+    max: 255
+  ww_v3_status_action:
+    name: WW V3 letzte Aktion (roh)
+    max: 255
+  ww_v3_status_reason:
+    name: WW V3 letzte Begruendung (roh)
+    max: 255
+  ww_v3_status_result:
+    name: WW V3 letztes Ergebnis (roh)
+    max: 255
+  ww_v3_status_error:
+    name: WW V3 letzter Fehler (roh)
+    max: 255
+  ww_v3_status_pushover:
+    name: WW V3 letzter Pushover-Status (roh)
+    max: 255
+
+input_datetime:
+  ww_v3_letzte_ladung:
+    name: WW V3 letzte Ladung
+    has_date: true
+    has_time: true
+  ww_v3_letztes_ladeende:
+    name: WW V3 letztes Ladeende
+    has_date: true
+    has_time: true
+  ww_v3_letzter_hygienezyklus:
+    name: WW V3 letzter Hygienezyklus
+    has_date: true
+    has_time: true
+  ww_v3_letzte_pushover_zeit:
+    name: WW V3 letzte Pushover-Sendezeit
+    has_date: true
+    has_time: true
+  ww_v3_letzter_fehler_zeit:
+    name: WW V3 Zeitpunkt letzter Fehler
+    has_date: true
+    has_time: true
+  ww_v3_letzter_erfolgreicher_durchlauf:
+    name: WW V3 letzter erfolgreicher Regelungsdurchlauf
+    has_date: true
+    has_time: true
+  ww_v3_letzter_uebersprungener_durchlauf:
+    name: WW V3 letzter uebersprungener Regelungsdurchlauf
+    has_date: true
+    has_time: true
+
+input_number:
+  ww_v3_kritisches_minimum:
+    name: WW V3 kritisches Minimum
+    min: 35
+    max: 50
+    step: 0.5
+    initial: 44
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_komfort_minimum:
+    name: WW V3 Komfortminimum
+    min: 40
+    max: 55
+    step: 0.5
+    initial: 47
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_normalziel:
+    name: WW V3 Normalziel
+    min: 45
+    max: 58
+    step: 0.5
+    initial: 51
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_maximaltemperatur:
+    name: WW V3 Maximaltemperatur
+    min: 50
+    max: 60
+    step: 0.5
+    initial: 55
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_hygiene_ziel:
+    name: WW V3 Hygiene-Zieltemperatur
+    min: 60
+    max: 65
+    step: 0.5
+    initial: 60
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_einspeiseverguetung:
+    name: WW V3 Einspeiseverguetung
+    min: 0
+    max: 30
+    step: 0.1
+    initial: 8
+    unit_of_measurement: "ct/kWh"
+    mode: box
+  ww_v3_mindestvorteil:
+    name: WW V3 Mindestvorteil Eigenverbrauch
+    min: 0
+    max: 20
+    step: 0.5
+    initial: 3
+    unit_of_measurement: "ct/kWh"
+    mode: box
+  ww_v3_einspeiseschwelle:
+    name: WW V3 Mindest-Einspeisung fuer PV-Ueberschuss
+    min: 100
+    max: 5000
+    step: 100
+    initial: 1000
+    unit_of_measurement: W
+    mode: box
+  ww_v3_start_hysterese:
+    name: WW V3 Start-Hysterese
+    min: 0.5
+    max: 6
+    step: 0.5
+    initial: 2
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_mindestlaufzeit:
+    name: WW V3 Mindestlaufzeit
+    min: 0
+    max: 90
+    step: 5
+    initial: 30
+    unit_of_measurement: min
+    mode: box
+  ww_v3_antitakt_sperre:
+    name: WW V3 Anti-Takt-Sperre
+    min: 0
+    max: 60
+    step: 5
+    initial: 20
+    unit_of_measurement: min
+    mode: box
+  ww_v3_max_ladedauer_minuten:
+    name: WW V3 maximale Ladedauer (Sicherheitsabschaltung)
+    min: 30
+    max: 240
+    step: 5
+    initial: 150
+    unit_of_measurement: min
+    mode: box
+  ww_v3_pushover_mindestabstand_min:
+    name: WW V3 Pushover Mindestabstand identischer Meldungen
+    min: 0
+    max: 180
+    step: 5
+    initial: 15
+    unit_of_measurement: min
+    mode: box
+  ww_v3_marstek_freigabe_soc:
+    name: WW V3 Marstek Freigabe-SoC
+    min: 20
+    max: 100
+    step: 5
+    initial: 80
+    unit_of_measurement: "%"
+    mode: box
+  ww_v3_marstek_schutz_soc:
+    name: WW V3 Marstek Schutz-SoC
+    min: 10
+    max: 90
+    step: 5
+    initial: 50
+    unit_of_measurement: "%"
+    mode: box
+  ww_v3_pv_tag_schwelle:
+    name: WW V3 PV-Tag ab Prognose (Ost+West)
+    min: 0
+    max: 60
+    step: 1
+    initial: 20
+    unit_of_measurement: kWh
+    mode: box
+  ww_v3_schwache_pv_schwelle:
+    name: WW V3 schwache PV-Prognose unter (Ost+West)
+    min: 0
+    max: 30
+    step: 1
+    initial: 10
+    unit_of_measurement: kWh
+    mode: box
+  ww_v3_nachtverlust_gelernt:
+    name: WW V3 gelernter Nachtverlust
+    min: 0
+    max: 15
+    step: 0.1
+    initial: 4
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_nacht_referenz:
+    name: WW V3 Nacht-Referenztemperatur
+    min: 0
+    max: 70
+    step: 0.1
+    initial: 50
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_verbrauch_morgen_gelernt:
+    name: WW V3 Verbrauch morgens gelernt
+    min: 0
+    max: 20
+    step: 0.1
+    initial: 4
+    unit_of_measurement: K
+    mode: box
+  ww_v3_verbrauch_abend_gelernt:
+    name: WW V3 Verbrauch abends gelernt
+    min: 0
+    max: 20
+    step: 0.1
+    initial: 3
+    unit_of_measurement: K
+    mode: box
+  ww_v3_verbrauch_referenz:
+    name: WW V3 Verbrauchs-Referenz
+    min: 0
+    max: 70
+    step: 0.1
+    initial: 50
+    unit_of_measurement: "°C"
+    mode: box
+  ww_v3_wp_energy_start:
+    name: WW V3 WP Energie bei Ladestart
+    min: 0
+    max: 1000000
+    step: 0.001
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+  ww_v3_kosten_heute:
+    name: WW V3 Kosten heute
+    min: -100
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: EUR
+    mode: box
+  ww_v3_einsparung_heute:
+    name: WW V3 Einsparung heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: EUR
+    mode: box
+  ww_v3_pv_energie_heute:
+    name: WW V3 PV-Energie WW heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+  ww_v3_netz_energie_heute:
+    name: WW V3 Netz-Energie WW heute
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0
+    unit_of_measurement: kWh
+    mode: box
+
+counter:
+  ww_v3_ladungen_heute:
+    name: WW V3 Ladungen heute
+    initial: 0
+    step: 1
+  ww_v3_aktionen_gesamt:
+    name: WW V3 ausgefuehrte Aktionen gesamt
+    initial: 0
+    step: 1
+  ww_v3_blockierte_aktionen:
+    name: WW V3 blockierte Aktionen gesamt
+    initial: 0
+    step: 1
+  ww_v3_fehler_gesamt:
+    name: WW V3 erkannte Fehler gesamt
+    initial: 0
+    step: 1
+
+sensor:
+  # Kumulierter WP-Energiezaehler aus Momentanleistung sensor.wp_gesamtleistung.
+  # Unveraendert gegenueber v2 - betrifft die elektrische Energiemessung der
+  # Waermepumpe, nicht die EMS-ESP-Migration.
+  - platform: integration
+    source: sensor.wp_gesamtleistung
+    name: WW V3 WP Energie Gesamt
+    unique_id: ww_v3_wp_energie_gesamt
+    unit_time: h
+    round: 3
+    method: trapezoidal
+
+  - platform: statistics
+    name: WW V3 Temperatur Maximum 7 Tage
+    unique_id: ww_v3_temperatur_maximum_7_tage
+    entity_id: sensor.ww_v3_warmwassertemperatur
+    state_characteristic: value_max
+    max_age:
+      days: 7
+    sampling_size: 20000
+    precision: 1
+
+# Wochen-/Monats-Energieverbrauch der Waermepumpe (gemessen).
+utility_meter:
+  ww_v3_wp_energie_woche:
+    source: sensor.ww_v3_wp_energie_gesamt
+    name: WW V3 WP Energie Woche
+    cycle: weekly
+  ww_v3_wp_energie_monat:
+    source: sensor.ww_v3_wp_energie_gesamt
+    name: WW V3 WP Energie Monat
+    cycle: monthly
+
+template:
+  - binary_sensor:
+      - name: WW V3 System aktiv
+        unique_id: ww_v3_system_aktiv
+        entity_category: diagnostic
+        state: "{{ is_state('input_boolean.ww_v3_aktiv','on') }}"
+
+      - name: WW V3 Manuelle Uebersteuerung
+        unique_id: ww_v3_manuelle_uebersteuerung
+        entity_category: diagnostic
+        state: "{{ not is_state('input_boolean.ww_v3_aktiv','on') }}"
+
+      # switch.boiler_dhw_onetime ist der von ww_v3 gesetzte Befehl
+      # ("wir haben eine Ladung angefordert"). Fuer die tatsaechliche
+      # Hardware-Bestaetigung siehe ww_v3_ladung_aktiv_hardware weiter unten -
+      # das ist neu gegenueber v2 und war mit der Bosch-Cloud-Anbindung nicht
+      # moeglich (dort gab es kein unabhaengiges "laedt gerade"-Signal).
+      - name: WW V3 Ladung aktiv
+        unique_id: ww_v3_ladung_aktiv
+        device_class: heat
+        state: "{{ is_state('switch.boiler_dhw_onetime','on') }}"
+
+      # Neu in v3: unabhaengige Hardware-Bestaetigung direkt vom EMS-Bus
+      # (binary_sensor.boiler_dhw_charging / _recharging), unabhaengig vom
+      # Zustand unseres eigenen Schalterbefehls. Ermoeglicht Erkennung von
+      # Faellen, in denen der Befehl gesetzt wurde, der Boiler aber aus
+      # geraeteseitigen Gruenden nicht laedt (siehe
+      # ww_v3_debug_ladung_ohne_hardware_reaktion weiter unten).
+      - name: WW V3 Ladung aktiv Hardware
+        unique_id: ww_v3_ladung_aktiv_hardware
+        device_class: heat
+        icon: mdi:progress-check
+        entity_category: diagnostic
+        state: >-
+          {{ is_state('binary_sensor.boiler_dhw_charging','on')
+             or is_state('binary_sensor.boiler_dhw_recharging','on') }}
+
+      # Prioritaet 1 der Aufgabenstellung: Pflichtdaten pruefen, bevor
+      # irgendeine andere Entscheidung getroffen wird. Wird als Bedingung in
+      # allen ladeausloesenden Automationen verwendet. Referenziert jetzt die
+      # EMS-ESP-Entities statt water_heater.dhw1/switch.charge.
+      - name: WW V3 Pflichtdaten gueltig
+        unique_id: ww_v3_pflichtdaten_gueltig
+        entity_category: diagnostic
+        state: >-
+          {{ states('sensor.ww_v3_warmwassertemperatur') not in ['unknown','unavailable']
+             and states('switch.boiler_dhw_onetime') not in ['unknown','unavailable']
+             and states('number.boiler_dhw_seltempsingle') not in ['unknown','unavailable'] }}
+
+      - name: WW V3 PV Ost verfuegbar
+        unique_id: ww_v3_pv_ost_verfuegbar
+        device_class: connectivity
+        entity_category: diagnostic
+        state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_a') not in ['unknown','unavailable'] }}"
+
+      - name: WW V3 PV West verfuegbar
+        unique_id: ww_v3_pv_west_verfuegbar
+        device_class: connectivity
+        entity_category: diagnostic
+        state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_b') not in ['unknown','unavailable'] }}"
+
+      - name: WW V3 Kritischer Bedarf
+        unique_id: ww_v3_kritischer_bedarf
+        device_class: problem
+        availability: "{{ states('sensor.ww_v3_warmwassertemperatur') not in ['unknown','unavailable'] }}"
+        state: >-
+          {{ states('sensor.ww_v3_warmwassertemperatur') | float(99)
+             < states('input_number.ww_v3_kritisches_minimum') | float(44) }}
+
+      - name: WW V3 Komfortbedarf
+        unique_id: ww_v3_komfortbedarf
+        availability: "{{ states('sensor.ww_v3_warmwassertemperatur') not in ['unknown','unavailable'] }}"
+        state: >-
+          {{ states('sensor.ww_v3_warmwassertemperatur') | float(99)
+             < states('input_number.ww_v3_komfort_minimum') | float(47) }}
+
+      - name: WW V3 Ladebedarf
+        unique_id: ww_v3_ladebedarf
+        availability: "{{ states('sensor.ww_v3_warmwassertemperatur') not in ['unknown','unavailable'] }}"
+        state: >-
+          {% set t = states('sensor.ww_v3_warmwassertemperatur') | float(99) %}
+          {% set z = states('sensor.ww_v3_effektives_ziel') | float(51) %}
+          {% set h = states('input_number.ww_v3_start_hysterese') | float(2) %}
+          {{ t < z - h }}
+
+      # PV-Ueberschuss weiterhin aus sensor.evu_leistung abgeleitet
+      # (unveraendert gegenueber v2, nicht Teil der EMS-ESP-Migration).
+      - name: WW V3 PV-Ueberschuss
+        unique_id: ww_v3_pv_ueberschuss
+        delay_on: "00:03:00"
+        delay_off: "00:02:00"
+        availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable'] }}"
+        state: >-
+          {{ states('sensor.evu_leistung') | float(0)
+             <= 0 - states('input_number.ww_v3_einspeiseschwelle') | float(1000) }}
+
+      - name: WW V3 Eigenverbrauch wirtschaftlich
+        unique_id: ww_v3_eigenverbrauch_wirtschaftlich
+        state: >-
+          {{ states('sensor.ww_v3_eigenverbrauchsvorteil') | float(-99)
+             >= states('input_number.ww_v3_mindestvorteil') | float(3) }}
+
+      - name: WW V3 Tibber wirtschaftlich
+        unique_id: ww_v3_tibber_wirtschaftlich
+        state: >-
+          {% set aktuell = states('sensor.ww_v3_tibber_preis') | float(999) %}
+          {% set avg = states('sensor.ww_v3_tibber_leading24') | float(999) %}
+          {{ is_state('binary_sensor.home_bestpreis_zeitraum','on') or aktuell <= avg }}
+
+      - name: WW V3 Marstek verfuegbar
+        unique_id: ww_v3_marstek_verfuegbar
+        device_class: connectivity
+        entity_category: diagnostic
+        state: >-
+          {% set s = states('sensor.marstek_venus_modbus_soc_batterie') %}
+          {{ is_state('input_boolean.ww_v3_marstek_nutzen','on')
+             and s not in ['unknown','unavailable',''] }}
+
+      - name: WW V3 Marstek freigegeben
+        unique_id: ww_v3_marstek_freigegeben
+        state: >-
+          {{ is_state('binary_sensor.ww_v3_marstek_verfuegbar','on')
+             and states('sensor.marstek_venus_modbus_soc_batterie') | float(0)
+             >= states('input_number.ww_v3_marstek_freigabe_soc') | float(80)
+             and is_state('binary_sensor.ww_v3_pv_ueberschuss','on') }}
+
+      - name: WW V3 Antitakt frei
+        unique_id: ww_v3_antitakt_frei
+        state: >-
+          {% set e = states('input_datetime.ww_v3_letztes_ladeende') %}
+          {% set s = states('input_number.ww_v3_antitakt_sperre') | float(20) %}
+          {{ e in ['unknown','unavailable',''] or
+             (now() - as_datetime(e)).total_seconds() / 60 >= s }}
+
+      - name: WW V3 Mindestlaufzeit erreicht
+        unique_id: ww_v3_mindestlaufzeit_erreicht
+        state: >-
+          {% set a = states('input_datetime.ww_v3_letzte_ladung') %}
+          {% set m = states('input_number.ww_v3_mindestlaufzeit') | float(30) %}
+          {{ a in ['unknown','unavailable',''] or
+             (now() - as_datetime(a)).total_seconds() / 60 >= m }}
+
+      - name: WW V3 Hygiene faellig
+        unique_id: ww_v3_hygiene_faellig
+        device_class: problem
+        state: >-
+          {% set max7 = states('sensor.ww_v3_temperatur_maximum_7_tage') | float(0) %}
+          {% set ziel = states('input_number.ww_v3_hygiene_ziel') | float(60) %}
+          {{ is_state('input_boolean.ww_v3_hygiene_aktiv','on') and max7 < ziel }}
+
+      # Neu in v3: zeigt an, ob das aktuell konfigurierte Hygiene-Ziel vom
+      # Geraet ueberhaupt erreicht werden kann (number.boiler_dhw_maxtemp ist
+      # die geraeteseitige Obergrenze). In v2 war das unverifizierbar
+      # (state_attr('number.charge_setpoint','max') war nicht in der CSV
+      # sichtbar) - jetzt liefert EMS-ESP diesen Wert als eigene Entity.
+      - name: WW V3 Hygieneziel ueber Geraetemaximum
+        unique_id: ww_v3_hygieneziel_ueber_geraetemaximum
+        device_class: problem
+        entity_category: diagnostic
+        availability: "{{ states('number.boiler_dhw_maxtemp') not in ['unknown','unavailable'] }}"
+        state: >-
+          {{ states('input_number.ww_v3_hygiene_ziel') | float(60)
+             > states('number.boiler_dhw_maxtemp') | float(99) }}
+
+  - sensor:
+      # Zentrale, validierte Warmwasser-Ist-Temperatur. Einzige Quelle jetzt:
+      # sensor.boiler_dhw_curtemp (EMS-ESP, "Boiler dhw Current intern
+      # temperature", lokal vom EMS-Bus gelesen). Ersetzt water_heater.dhw1/
+      # current_temperature (Bosch Home Connect Cloud, in v2 verwendet).
+      # Kein Fantasiewert bei ungueltigen Daten - der Sensor wird stattdessen
+      # 'unavailable'. Siehe ww_v3_open_questions.md zur Wahl curtemp vs.
+      # curtemp2 (interner vs. externer Fuehler).
+      - name: WW V3 Warmwassertemperatur
+        unique_id: ww_v3_warmwassertemperatur
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        availability: "{{ states('sensor.boiler_dhw_curtemp') not in ['unknown','unavailable'] }}"
+        state: "{{ states('sensor.boiler_dhw_curtemp') | float(0) | round(1) }}"
+        attributes:
+          quelle: sensor.boiler_dhw_curtemp (EMS-ESP, lokal)
+          temperatur_extern: "{{ states('sensor.boiler_dhw_curtemp2') }}"
+          geraet_temperatur_ok: "{{ states('binary_sensor.boiler_dhw_tempok') }}"
+          aktualisiert_vor_sekunden: >-
+            {% set lu = states.sensor.boiler_dhw_curtemp.last_updated %}
+            {{ ((now() - lu).total_seconds() | round(0)) if lu is not none else 'unbekannt' }}
+          veraltet: >-
+            {% set lu = states.sensor.boiler_dhw_curtemp.last_updated %}
+            {{ (now() - lu).total_seconds() > 1800 if lu is not none else true }}
+
+      - name: WW V3 Tibber Preis
+        unique_id: ww_v3_tibber_preis
+        unit_of_measurement: "ct/kWh"
+        device_class: monetary
+        state_class: measurement
+        availability: "{{ states('sensor.home_aktueller_strompreis') not in ['unknown','unavailable'] }}"
+        state: "{{ states('sensor.home_aktueller_strompreis') | float(0) | round(3) }}"
+
+      - name: WW V3 Tibber Leading24
+        unique_id: ww_v3_tibber_leading24
+        unit_of_measurement: "ct/kWh"
+        device_class: monetary
+        state_class: measurement
+        availability: "{{ states('sensor.home_preis_vorlaufend_24h') not in ['unknown','unavailable'] }}"
+        state: "{{ states('sensor.home_preis_vorlaufend_24h') | float(0) | round(3) }}"
+
+      - name: WW V3 Naechster Bestpreis-Start
+        unique_id: ww_v3_naechster_bestpreis_start
+        icon: mdi:clock-star-four-points
+        availability: "{{ states('sensor.home_bestpreis_startet') not in ['unknown','unavailable',''] }}"
+        state: >-
+          {{ as_timestamp(states('sensor.home_bestpreis_startet')) | timestamp_custom('%Y-%m-%d %H:%M:%S') }}
+        attributes:
+          quelle: sensor.home_bestpreis_startet
+
+      - name: WW V3 Naechster Bestpreis in
+        unique_id: ww_v3_naechster_bestpreis_in
+        unit_of_measurement: min
+        device_class: duration
+        availability: "{{ states('sensor.home_bestpreis_startet_in') not in ['unknown','unavailable',''] }}"
+        state: "{{ states('sensor.home_bestpreis_startet_in') | float(0) | round(0) }}"
+
+      - name: WW V3 Eigenverbrauchsvorteil
+        unique_id: ww_v3_eigenverbrauchsvorteil
+        unit_of_measurement: "ct/kWh"
+        state_class: measurement
+        state: >-
+          {{ (states('sensor.ww_v3_tibber_preis') | float(0)
+              - states('input_number.ww_v3_einspeiseverguetung') | float(8)) | round(2) }}
+
+      - name: WW V3 Marstek Stufe
+        unique_id: ww_v3_marstek_stufe
+        state: >-
+          {% set s = states('sensor.marstek_venus_modbus_soc_batterie') | float(-1) %}
+          {% set f = states('input_number.ww_v3_marstek_freigabe_soc') | float(80) %}
+          {% set g = states('input_number.ww_v3_marstek_schutz_soc') | float(50) %}
+          {% if not is_state('binary_sensor.ww_v3_marstek_verfuegbar','on') %}offline
+          {% elif s >= f %}Freigabe
+          {% elif s >= g %}Eingeschraenkt
+          {% else %}Schutz{% endif %}
+
+      - name: WW V3 Verbrauchsprognose
+        unique_id: ww_v3_verbrauchsprognose
+        unit_of_measurement: K
+        state_class: measurement
+        state: >-
+          {% if now().hour < 12 %}
+            {{ states('input_number.ww_v3_verbrauch_morgen_gelernt') | float(4) }}
+          {% else %}
+            {{ states('input_number.ww_v3_verbrauch_abend_gelernt') | float(3) }}
+          {% endif %}
+        attributes:
+          zeitraum: "{{ 'Morgen' if now().hour < 12 else 'Abend' }}"
+
+      # --- PV Ost/West: aktuelle Leistung -------------------------------
+      # Unveraendert gegenueber v2 (Ost = sensor.stp10_..._pv_power_a,
+      # West = sensor.stp10_..._pv_power_b) - kein EMS-ESP-Bezug.
+      - name: WW V3 PV Leistung Ost
+        unique_id: ww_v3_pv_leistung_ost
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: "{{ is_state('binary_sensor.ww_v3_pv_ost_verfuegbar','on') }}"
+        state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_a') | float(0) | round(0) }}"
+
+      - name: WW V3 PV Leistung West
+        unique_id: ww_v3_pv_leistung_west
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: "{{ is_state('binary_sensor.ww_v3_pv_west_verfuegbar','on') }}"
+        state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_b') | float(0) | round(0) }}"
+
+      - name: WW V3 PV Leistung Gesamt
+        unique_id: ww_v3_pv_leistung_gesamt
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ is_state('binary_sensor.ww_v3_pv_ost_verfuegbar','on')
+             or is_state('binary_sensor.ww_v3_pv_west_verfuegbar','on') }}
+        state: >-
+          {% set ov = is_state('binary_sensor.ww_v3_pv_ost_verfuegbar','on') %}
+          {% set wv = is_state('binary_sensor.ww_v3_pv_west_verfuegbar','on') %}
+          {{ ((states('sensor.ww_v3_pv_leistung_ost') | float(0)) if ov else 0)
+             + ((states('sensor.ww_v3_pv_leistung_west') | float(0)) if wv else 0) }}
+        attributes:
+          modus: >-
+            {% set ov = is_state('binary_sensor.ww_v3_pv_ost_verfuegbar','on') %}
+            {% set wv = is_state('binary_sensor.ww_v3_pv_west_verfuegbar','on') %}
+            {% if ov and wv %}beide Anlagen
+            {% elif ov %}nur Ost (West ausgefallen)
+            {% elif wv %}nur West (Ost ausgefallen)
+            {% else %}keine Anlage verfuegbar{% endif %}
+
+      # --- Netz: Bezug/Einspeisung/Ueberschuss (unveraendert) -----------
+      - name: WW V3 Netzbezug Watt
+        unique_id: ww_v3_netzbezug_watt
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable'] }}"
+        state: "{{ [states('sensor.evu_leistung') | float(0), 0] | max | round(0) }}"
+
+      - name: WW V3 Netzeinspeisung Watt
+        unique_id: ww_v3_netzeinspeisung_watt
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable'] }}"
+        state: "{{ [0 - (states('sensor.evu_leistung') | float(0)), 0] | max | round(0) }}"
+
+      - name: WW V3 PV Ueberschuss Watt
+        unique_id: ww_v3_pv_ueberschuss_watt
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable'] }}"
+        state: "{{ [0 - (states('sensor.evu_leistung') | float(0)), 0] | max | round(0) }}"
+
+      # --- PV-Forecast kombiniert Ost+West (unveraendert) ---------------
+      - name: WW V3 PV Forecast Rest Heute Gesamt
+        unique_id: ww_v3_pv_forecast_rest_heute_gesamt
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.energy_production_today_remaining') not in ['unknown','unavailable']
+             or states('sensor.energy_production_today_remaining_2') not in ['unknown','unavailable'] }}
+        state: >-
+          {% set o = states('sensor.energy_production_today_remaining') %}
+          {% set w = states('sensor.energy_production_today_remaining_2') %}
+          {% set ov = o not in ['unknown','unavailable'] %}
+          {% set wv = w not in ['unknown','unavailable'] %}
+          {{ (((o | float(0)) if ov else 0) + ((w | float(0)) if wv else 0)) | round(2) }}
+        attributes:
+          ost_verfuegbar: "{{ states('sensor.energy_production_today_remaining') not in ['unknown','unavailable'] }}"
+          west_verfuegbar: "{{ states('sensor.energy_production_today_remaining_2') not in ['unknown','unavailable'] }}"
+
+      - name: WW V3 PV Forecast Morgen Gesamt
+        unique_id: ww_v3_pv_forecast_morgen_gesamt
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.energy_production_tomorrow') not in ['unknown','unavailable']
+             or states('sensor.energy_production_tomorrow_2') not in ['unknown','unavailable'] }}
+        state: >-
+          {% set o = states('sensor.energy_production_tomorrow') %}
+          {% set w = states('sensor.energy_production_tomorrow_2') %}
+          {% set ov = o not in ['unknown','unavailable'] %}
+          {% set wv = w not in ['unknown','unavailable'] %}
+          {{ (((o | float(0)) if ov else 0) + ((w | float(0)) if wv else 0)) | round(2) }}
+        attributes:
+          ost_verfuegbar: "{{ states('sensor.energy_production_tomorrow') not in ['unknown','unavailable'] }}"
+          west_verfuegbar: "{{ states('sensor.energy_production_tomorrow_2') not in ['unknown','unavailable'] }}"
+
+      - name: WW V3 PV Forecast naechste Stunde Gesamt
+        unique_id: ww_v3_pv_forecast_naechste_stunde_gesamt
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: measurement
+        availability: >-
+          {{ states('sensor.energy_next_hour') not in ['unknown','unavailable']
+             or states('sensor.energy_next_hour_2') not in ['unknown','unavailable'] }}
+        state: >-
+          {% set o = states('sensor.energy_next_hour') %}
+          {% set w = states('sensor.energy_next_hour_2') %}
+          {% set ov = o not in ['unknown','unavailable'] %}
+          {% set wv = w not in ['unknown','unavailable'] %}
+          {{ (((o | float(0)) if ov else 0) + ((w | float(0)) if wv else 0)) | round(2) }}
+
+      - name: WW V3 Dynamisches Ziel
+        unique_id: ww_v3_dynamisches_ziel
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >-
+          {% set normal = states('input_number.ww_v3_normalziel') | float(51) %}
+          {% set komfort = states('input_number.ww_v3_komfort_minimum') | float(47) %}
+          {% set maximum = states('input_number.ww_v3_maximaltemperatur') | float(55) %}
+          {% set verlust = states('input_number.ww_v3_nachtverlust_gelernt') | float(4) %}
+          {% set bedarf = states('sensor.ww_v3_verbrauchsprognose') | float(4) %}
+          {% set pv_m = states('sensor.ww_v3_pv_forecast_morgen_gesamt') | float(-1) %}
+          {% set pv_schwach = states('input_number.ww_v3_schwache_pv_schwelle') | float(10) %}
+          {% set pv_gut = states('input_number.ww_v3_pv_tag_schwelle') | float(20) %}
+          {% set n = namespace(z=normal) %}
+          {% if komfort + verlust + bedarf * 0.35 > n.z %}{% set n.z = komfort + verlust + bedarf * 0.35 %}{% endif %}
+          {% if pv_m >= 0 and pv_m < pv_schwach %}{% set n.z = n.z + 1.5 %}
+          {% elif pv_m >= pv_gut * 1.5 %}{% set n.z = n.z - 1 %}{% endif %}
+          {% set z = [[n.z, komfort] | max, maximum] | min %}
+          {{ (z * 2) | round(0) / 2 }}
+        attributes:
+          begruendung: >-
+            gelernter Nachtverlust={{ states('input_number.ww_v3_nachtverlust_gelernt') }}K;
+            Verbrauchsprognose={{ states('sensor.ww_v3_verbrauchsprognose') }}K;
+            PV morgen Ost+West={{ states('sensor.ww_v3_pv_forecast_morgen_gesamt') }}kWh
+
+      - name: WW V3 Effektives Ziel
+        unique_id: ww_v3_effektives_ziel
+        device_class: temperature
+        unit_of_measurement: "°C"
+        state_class: measurement
+        state: >-
+          {% if is_state('input_boolean.ww_v3_pv_vorrang','on')
+                and is_state('binary_sensor.ww_v3_pv_ueberschuss','on')
+                and is_state('binary_sensor.ww_v3_eigenverbrauch_wirtschaftlich','on') %}
+            {{ states('input_number.ww_v3_maximaltemperatur') | float(55) }}
+          {% else %}
+            {{ states('sensor.ww_v3_dynamisches_ziel') | float(51) }}
+          {% endif %}
+        attributes:
+          modus: >-
+            {% if is_state('binary_sensor.ww_v3_pv_ueberschuss','on')
+                  and is_state('binary_sensor.ww_v3_eigenverbrauch_wirtschaftlich','on') %}PV-Waermespeicher
+            {% else %}dynamisch{% endif %}
+
+      - name: WW V3 Aktive Strategie
+        unique_id: ww_v3_aktive_strategie
+        state: >-
+          {% if not is_state('input_boolean.ww_v3_aktiv','on') %}Deaktiviert
+          {% elif is_state('binary_sensor.ww_v3_kritischer_bedarf','on') %}P0 Kritischer Schutz
+          {% elif is_state('switch.boiler_dhw_onetime','on') %}{{ states('input_text.ww_v3_aktive_strategie') }}
+          {% elif is_state('binary_sensor.ww_v3_ladebedarf','on') %}Warten auf wirtschaftliches Fenster
+          {% else %}Bereitschaft{% endif %}
+
+      - name: WW V3 Naechste Ladung
+        unique_id: ww_v3_naechste_ladung
+        state: >-
+          {% if not is_state('input_boolean.ww_v3_aktiv','on') %}Optimierung aus
+          {% elif is_state('switch.boiler_dhw_onetime','on') %}laeuft gerade
+          {% elif not is_state('binary_sensor.ww_v3_ladebedarf','on') %}nicht erforderlich
+          {% elif is_state('binary_sensor.ww_v3_kritischer_bedarf','on') %}sofort
+          {% elif is_state('binary_sensor.ww_v3_pv_ueberschuss','on') and is_state('binary_sensor.ww_v3_eigenverbrauch_wirtschaftlich','on') %}jetzt: PV
+          {% elif is_state('binary_sensor.ww_v3_tibber_wirtschaftlich','on') %}jetzt: Tibber
+          {% elif states('sensor.ww_v3_naechster_bestpreis_start') not in ['unknown','unavailable','nicht verfuegbar',''] %}{{ states('sensor.ww_v3_naechster_bestpreis_start') }}
+          {% else %}spaetestens 04:00 Uhr{% endif %}
+
+      - name: WW V3 Ampel
+        unique_id: ww_v3_ampel
+        state: >-
+          {% if states('sensor.ww_v3_warmwassertemperatur') in ['unknown','unavailable']
+                or is_state('binary_sensor.ww_v3_kritischer_bedarf','on') %}rot
+          {% elif states('sensor.ww_v3_tibber_preis') in ['unknown','unavailable']
+                or (states('sensor.energy_production_today') in ['unknown','unavailable']
+                    and states('sensor.energy_production_today_2') in ['unknown','unavailable'])
+                or not is_state('input_boolean.ww_v3_aktiv','on') %}orange
+          {% else %}gruen{% endif %}
+        attributes:
+          klartext: >-
+            {% if states('sensor.ww_v3_warmwassertemperatur') in ['unknown','unavailable'] %}Warmwassertemperatur fehlt
+            {% elif is_state('binary_sensor.ww_v3_kritischer_bedarf','on') %}kritisches Minimum unterschritten
+            {% elif not is_state('input_boolean.ww_v3_aktiv','on') %}Optimierung deaktiviert
+            {% elif states('sensor.ww_v3_tibber_preis') in ['unknown','unavailable'] %}Tibber-Preis fehlt
+            {% elif states('sensor.energy_production_today') in ['unknown','unavailable'] and states('sensor.energy_production_today_2') in ['unknown','unavailable'] %}PV-Prognose beider Anlagen fehlt
+            {% else %}alle Kernfunktionen verfuegbar{% endif %}
+
+      - name: WW V3 Kosten Woche geschaetzt
+        unique_id: ww_v3_kosten_woche_geschaetzt
+        unit_of_measurement: EUR
+        state_class: measurement
+        state: >-
+          {{ ((states('sensor.ww_v3_wp_energie_woche') | float(0))
+              * (states('sensor.ww_v3_tibber_preis') | float(0)) / 100) | round(2) }}
+        attributes:
+          hinweis: "Geschaetzt mit aktuellem Strompreis, nicht mit dem historischen Preis je Ladevorgang"
+
+      - name: WW V3 Kosten Monat geschaetzt
+        unique_id: ww_v3_kosten_monat_geschaetzt
+        unit_of_measurement: EUR
+        state_class: measurement
+        state: >-
+          {{ ((states('sensor.ww_v3_wp_energie_monat') | float(0))
+              * (states('sensor.ww_v3_tibber_preis') | float(0)) / 100) | round(2) }}
+        attributes:
+          hinweis: "Geschaetzt mit aktuellem Strompreis, nicht mit dem historischen Preis je Ladevorgang"
+
+      - name: WW V3 Kostenstatus
+        unique_id: ww_v3_kostenstatus
+        state: "{{ states('input_number.ww_v3_kosten_heute') | float(0) | round(2) }} EUR heute"
+        attributes:
+          einsparung_eur: "{{ states('input_number.ww_v3_einsparung_heute') }}"
+          pv_energie_kwh: "{{ states('input_number.ww_v3_pv_energie_heute') }}"
+          netz_energie_kwh: "{{ states('input_number.ww_v3_netz_energie_heute') }}"
+          einspeiseverguetung_ct: "{{ states('input_number.ww_v3_einspeiseverguetung') }}"
+          kosten_woche_geschaetzt_eur: "{{ states('sensor.ww_v3_kosten_woche_geschaetzt') }}"
+          kosten_monat_geschaetzt_eur: "{{ states('sensor.ww_v3_kosten_monat_geschaetzt') }}"
+          energiezaehler_konfiguriert: >-
+            {% set e = states('input_text.ww_v3_wp_energy_entity') %}
+            {{ e not in ['unknown','unavailable',''] and states(e) not in ['unknown','unavailable',''] }}
+
+      # --- Diagnose ------------------------------------------------------
+      # Pflicht-Entity-Liste jetzt auf EMS-ESP umgestellt (statt
+      # water_heater.dhw1/switch.charge). number.boiler_dhw_seltempsingle neu
+      # aufgenommen, da script.ww_v3_ladung_starten diese Entity direkt
+      # beschreibt.
+      - name: WW V3 Diagnose Pflichtentities
+        unique_id: ww_v3_diagnose_pflichtentities
+        entity_category: diagnostic
+        state: >-
+          {% set ids = ['sensor.boiler_dhw_curtemp','switch.boiler_dhw_onetime',
+                        'number.boiler_dhw_seltempsingle','sensor.home_aktueller_strompreis',
+                        'sensor.energy_production_today','sensor.energy_production_today_2',
+                        'sensor.evu_leistung','sensor.gesamtleistung_haushalt'] %}
+          {% set ns = namespace(fehlend=[]) %}
+          {% for e in ids %}
+            {% if states(e) in ['unknown','unavailable'] %}
+              {% set ns.fehlend = ns.fehlend + [e] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.fehlend | count }} nicht verfuegbar
+        attributes:
+          fehlende_entities: >-
+            {% set ids = ['sensor.boiler_dhw_curtemp','switch.boiler_dhw_onetime',
+                          'number.boiler_dhw_seltempsingle','sensor.home_aktueller_strompreis',
+                          'sensor.energy_production_today','sensor.energy_production_today_2',
+                          'sensor.evu_leistung','sensor.gesamtleistung_haushalt'] %}
+            {% set ns = namespace(fehlend=[]) %}
+            {% for e in ids %}
+              {% if states(e) in ['unknown','unavailable'] %}
+                {% set ns.fehlend = ns.fehlend + [e] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.fehlend | join(', ') if ns.fehlend else 'keine' }}
+
+      - name: WW V3 Last Action
+        unique_id: ww_v3_last_action
+        icon: mdi:text-box-outline
+        entity_category: diagnostic
+        state: "{{ states('input_text.ww_v3_status_action') }}"
+
+      - name: WW V3 Last Reason
+        unique_id: ww_v3_last_reason
+        icon: mdi:text-box-outline
+        entity_category: diagnostic
+        state: "{{ states('input_text.ww_v3_status_reason') }}"
+
+      - name: WW V3 Last Result
+        unique_id: ww_v3_last_result
+        icon: mdi:text-box-outline
+        entity_category: diagnostic
+        state: "{{ states('input_text.ww_v3_status_result') }}"
+
+      - name: WW V3 Last Error
+        unique_id: ww_v3_last_error
+        icon: mdi:alert-circle-outline
+        entity_category: diagnostic
+        state: "{{ states('input_text.ww_v3_status_error') }}"
+
+      - name: WW V3 Last Pushover Status
+        unique_id: ww_v3_last_pushover_status
+        icon: mdi:bell-outline
+        entity_category: diagnostic
+        state: "{{ states('input_text.ww_v3_status_pushover') }}"
+
+# =============================================================================
+# Zentrale Skripte
+# =============================================================================
+script:
+  # Zentrales Debug-/Pushover-Skript. Unveraendert gegenueber v2, ausser dem
+  # Nachrichtentext (jetzt EMS-ESP-Entities statt water_heater.dhw1/
+  # switch.charge).
+  ww_v3_debug_log:
+    alias: WW V3 - Zentrales Debug-Log
+    mode: queued
+    max: 20
+    fields:
+      source:
+        description: Auslösende Automation/Skript
+      trigger:
+        description: Auslösender Trigger
+        default: ""
+      decision:
+        description: Getroffene Entscheidung
+        default: ""
+      reason:
+        description: Begründung
+        default: ""
+      action:
+        description: Ausgeführte Aktion
+        default: ""
+      result:
+        description: Ergebnis
+        default: ""
+      severity:
+        description: "info | warning | error | critical"
+        default: "info"
+      error:
+        description: Fehlermeldung
+        default: ""
+      send_pushover:
+        description: Pushover-Versand grundsätzlich erlauben
+        default: true
+    variables:
+      v_source: "{{ source | default('unbekannt') }}"
+      v_trigger: "{{ trigger | default('') }}"
+      v_decision: "{{ decision | default('') }}"
+      v_reason: "{{ reason | default('') }}"
+      v_action: "{{ action | default('') }}"
+      v_result: "{{ result | default('') }}"
+      v_severity: "{{ severity | default('info') }}"
+      v_error: "{{ error | default('') }}"
+      v_send_pushover: "{{ send_pushover | default(true) }}"
+      ts: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      signatur: "{{ (v_source ~ '|' ~ v_decision ~ '|' ~ v_reason ~ '|' ~ v_action ~ '|' ~ v_result ~ '|' ~ v_severity) | truncate(250, True, '') }}"
+      nachricht: >-
+        WW DEBUG
+        Zeit: {{ ts }}
+        Quelle: {{ v_source }}
+        Trigger: {{ v_trigger }}
+        Temperatur: {{ states('sensor.ww_v3_warmwassertemperatur') }} °C
+        Charge: {{ states('switch.boiler_dhw_onetime') }}
+        Ziel: {{ states('sensor.ww_v3_effektives_ziel') }} °C
+        PV Ost: {{ states('sensor.ww_v3_pv_leistung_ost') }} W
+        PV West: {{ states('sensor.ww_v3_pv_leistung_west') }} W
+        Ueberschuss: {{ states('sensor.ww_v3_pv_ueberschuss_watt') }} W
+        Preis: {{ states('sensor.ww_v3_tibber_preis') }} ct/kWh
+        Entscheidung: {{ v_decision }}
+        Grund: {{ v_reason }}
+        Aktion: {{ v_action }}
+        Ergebnis: {{ v_result }}{{ '\nFehler: ' ~ v_error if v_error != '' else '' }}
+    sequence:
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_status_action
+        data:
+          value: "{{ v_action | truncate(250) }}"
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_status_reason
+        data:
+          value: "{{ v_reason | truncate(250) }}"
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_status_result
+        data:
+          value: "{{ v_result | truncate(250) }}"
+      - if:
+          - condition: template
+            value_template: "{{ v_severity in ['error','critical'] }}"
+        then:
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.ww_v3_status_error
+            data:
+              value: "{{ v_error | truncate(250) }}"
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v3_letzter_fehler_zeit
+            data:
+              datetime: "{{ ts }}"
+          - service: counter.increment
+            target:
+              entity_id: counter.ww_v3_fehler_gesamt
+      - if:
+          - condition: template
+            value_template: "{{ v_result == 'Erfolgreich' }}"
+        then:
+          - service: counter.increment
+            target:
+              entity_id: counter.ww_v3_aktionen_gesamt
+      - if:
+          - condition: template
+            value_template: "{{ 'Blockiert' in v_decision or 'Blockiert' in v_result }}"
+        then:
+          - service: counter.increment
+            target:
+              entity_id: counter.ww_v3_blockierte_aktionen
+      - service: logbook.log
+        data:
+          name: WW V3
+          message: "{{ v_decision }} – {{ v_reason }} ({{ v_action }} / {{ v_result }})"
+          entity_id: switch.boiler_dhw_onetime
+      - if:
+          - condition: template
+            value_template: >-
+              {% set letzte = as_timestamp(states('input_datetime.ww_v3_letzte_pushover_zeit'), 0) %}
+              {% set minuten = (as_timestamp(now()) - letzte) / 60 %}
+              {% set gleich = signatur == states('input_text.ww_v3_letzte_debug_nachricht') %}
+              {{ is_state('input_boolean.ww_v3_debug_mode','on') and v_send_pushover
+                 and not (gleich and minuten < (states('input_number.ww_v3_pushover_mindestabstand_min') | float(15))) }}
+        then:
+          - service: notify.pushover
+            continue_on_error: true
+            data:
+              title: "WW V3 {{ v_severity | upper }}"
+              message: "{{ nachricht }}"
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.ww_v3_letzte_debug_nachricht
+            data:
+              value: "{{ signatur }}"
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v3_letzte_pushover_zeit
+            data:
+              datetime: "{{ ts }}"
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.ww_v3_status_pushover
+            data:
+              value: "gesendet {{ ts }}: {{ v_decision | truncate(150) }}"
+
+  ww_v3_pushover_test:
+    alias: WW V3 - Pushover Testnachricht
+    mode: single
+    sequence:
+      - service: notify.pushover
+        continue_on_error: true
+        data:
+          title: "WW V3 Test"
+          message: "Testnachricht von ww_v3_debug_test um {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_status_pushover
+        data:
+          value: "Testnachricht gesendet um {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v3_letzte_pushover_zeit
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  # Ladung starten - jetzt gegen die EMS-ESP-Entities. Wesentliche Aenderungen
+  # gegenueber v2 (siehe ww_v3_changelog.md):
+  # - number.charge_setpoint -> number.boiler_dhw_seltempsingle
+  # - switch.charge -> switch.boiler_dhw_onetime
+  # - number.charge_duration wird NICHT mehr gesetzt: es gibt keine EMS-ESP-
+  #   Entity, die eindeutig zu switch.boiler_dhw_onetime gehoert (die
+  #   vorhandene number.thermostat_dhw_chargeduration gehoert zum getrennten
+  #   switch.thermostat_dhw_charge, der hier nicht verwendet wird). Die
+  #   Ladedauer wird stattdessen ausschliesslich durch die zwei bereits
+  #   vorhandenen Sicherheitsmechanismen begrenzt: automation.ww_v3_stop_ziel
+  #   (Stop bei Zieltemperatur) und automation.ww_v3_sicherheitsabschaltung_
+  #   maxdauer (Stop nach input_number.ww_v3_max_ladedauer_minuten). Das ist
+  #   robuster als der v2-Ansatz, der einen kaum passenden Geraetewert
+  #   (180 min fest) setzte.
+  # - Neu: Ziel wird auf number.boiler_dhw_maxtemp (Geraete-Obergrenze)
+  #   gekappt, falls das gewuenschte Ziel darueber liegt, mit Warn-Log.
+  ww_v3_ladung_starten:
+    alias: WW V3 - Ladung starten
+    mode: single
+    fields:
+      grund:
+        description: Ladegrund
+      hygiene:
+        description: Hygieneziel verwenden
+        default: false
+    variables:
+      grund_text: "{{ grund | default('Unbekannt') }}"
+      hygiene_modus: "{{ hygiene | default(false) }}"
+      bereits_an: "{{ is_state('switch.boiler_dhw_onetime','on') }}"
+      verfuegbar: "{{ states('switch.boiler_dhw_onetime') not in ['unknown','unavailable'] }}"
+      temp_gueltig: "{{ is_state('binary_sensor.ww_v3_pflichtdaten_gueltig','on') }}"
+      ziel_gewuenscht: >-
+        {{ states('input_number.ww_v3_hygiene_ziel') | float(60)
+           if hygiene_modus else states('sensor.ww_v3_effektives_ziel') | float(51) }}
+      geraet_max: "{{ states('number.boiler_dhw_maxtemp') | float(99) }}"
+      ziel: "{{ [ziel_gewuenscht, geraet_max] | min }}"
+      energy_entity: "{{ states('input_text.ww_v3_wp_energy_entity') }}"
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ not verfuegbar }}"
+        then:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_ladung_starten
+              decision: Abgebrochen
+              reason: "switch.boiler_dhw_onetime nicht verfuegbar"
+              action: keine
+              result: Fehlgeschlagen
+              severity: error
+              error: "switch.boiler_dhw_onetime Zustand: {{ states('switch.boiler_dhw_onetime') }}"
+          - stop: "switch.boiler_dhw_onetime nicht verfuegbar"
+      - if:
+          - condition: template
+            value_template: "{{ not temp_gueltig and not hygiene_modus }}"
+        then:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_ladung_starten
+              decision: Abgebrochen
+              reason: Warmwassertemperatur ungueltig
+              action: keine
+              result: Blockiert
+              severity: warning
+          - stop: "Warmwassertemperatur ungueltig"
+      - if:
+          - condition: template
+            value_template: "{{ bereits_an }}"
+        then:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_ladung_starten
+              decision: Kein erneuter Start
+              reason: "{{ grund_text }} – Ladung laeuft bereits"
+              action: keine
+              result: Uebersprungen
+              severity: info
+              send_pushover: false
+          - stop: "Ladung laeuft bereits"
+      - condition: state
+        entity_id: input_boolean.ww_v3_aktiv
+        state: "on"
+      - if:
+          - condition: template
+            value_template: "{{ ziel < ziel_gewuenscht }}"
+        then:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_ladung_starten
+              decision: Ziel begrenzt
+              reason: >-
+                Gewuenschtes Ziel {{ ziel_gewuenscht }} C liegt ueber der
+                Geraete-Maximaltemperatur (number.boiler_dhw_maxtemp =
+                {{ geraet_max }} C)
+              action: "Ziel auf {{ ziel }} C begrenzt"
+              result: Information
+              severity: warning
+      - service: number.set_value
+        target:
+          entity_id: number.boiler_dhw_seltempsingle
+        data:
+          value: "{{ ziel }}"
+      - service: switch.turn_on
+        target:
+          entity_id: switch.boiler_dhw_onetime
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_letzter_grund
+        data:
+          value: "{{ grund_text }} (Ziel {{ ziel }}C)"
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.ww_v3_aktive_strategie
+        data:
+          value: "{{ grund_text }}"
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v3_letzte_ladung
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - if:
+          - condition: template
+            value_template: "{{ energy_entity not in ['unknown','unavailable',''] and states(energy_entity) not in ['unknown','unavailable'] }}"
+        then:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.ww_v3_wp_energy_start
+            data:
+              value: "{{ states(energy_entity) | float(0) }}"
+      - service: counter.increment
+        target:
+          entity_id: counter.ww_v3_ladungen_heute
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_ladung_starten
+          decision: Ladung gestartet
+          reason: "{{ grund_text }}"
+          action: "switch.boiler_dhw_onetime einschalten, Ziel {{ ziel }} C"
+          result: Erfolgreich
+          severity: info
+
+# =============================================================================
+# Automationen
+# =============================================================================
+automation:
+  - id: ww_v3_p0_kritisch
+    alias: WW V3 - P0 Kritischer Schutz
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ww_v3_kritischer_bedarf
+        to: "on"
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_pflichtdaten_gueltig
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_kritischer_bedarf
+        state: "on"
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "off"
+    action:
+      - service: script.ww_v3_ladung_starten
+        data:
+          grund: P0 Kritischer Schutz
+
+  - id: ww_v3_wirtschaftliche_ladung
+    alias: WW V3 - Wirtschaftliche Ladeentscheidung
+    mode: single
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.ww_v3_pv_ueberschuss
+          - binary_sensor.home_bestpreis_zeitraum
+          - binary_sensor.ww_v3_ladebedarf
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_pflichtdaten_gueltig
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_ladebedarf
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_antitakt_frei
+        state: "on"
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "off"
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ww_v3_pv_ueberschuss
+                state: "on"
+              - condition: state
+                entity_id: binary_sensor.ww_v3_eigenverbrauch_wirtschaftlich
+                state: "on"
+            sequence:
+              - service: script.ww_v3_ladung_starten
+                data:
+                  grund: P2 PV wirtschaftlich
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.ww_v3_tibber_wirtschaftlich
+                state: "on"
+            sequence:
+              - service: script.ww_v3_ladung_starten
+                data:
+                  grund: P3 Tibber Leading24
+        default:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_wirtschaftliche_ladung
+              decision: Warten
+              reason: >-
+                {% if states('sensor.ww_v3_pv_forecast_naechste_stunde_gesamt') | float(0) >= (states('input_number.ww_v3_schwache_pv_schwelle') | float(10) / 4) %}
+                PV-Ertrag in Kuerze erwartet, aktuell weder Ueberschuss noch wirtschaftlicher Preis
+                {% else %}
+                Kein PV-Ueberschuss, kein wirtschaftlicher Preis, kein kurzfristiger PV-Ertrag erwartet
+                {% endif %}
+              action: keine
+              result: Zurueckgestellt
+              severity: info
+              send_pushover: false
+
+  - id: ww_v3_debug_blockade
+    alias: WW V3 - Debug Blockierte Ladung
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id:
+          - binary_sensor.ww_v3_ladebedarf
+          - binary_sensor.ww_v3_antitakt_frei
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_debug_mode
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_ladebedarf
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_antitakt_frei
+        state: "off"
+    action:
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_debug_blockade
+          decision: Blockiert
+          reason: Anti-Takt-Sperre aktiv
+          action: keine
+          result: Blockiert durch Sperrzeit
+          severity: info
+
+  - id: ww_v3_nachtgarantie
+    alias: WW V3 - Nachtgarantie 04:00
+    mode: single
+    trigger:
+      - platform: time
+        at: "04:00:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_pflichtdaten_gueltig
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_komfortbedarf
+        state: "on"
+    action:
+      - service: script.ww_v3_ladung_starten
+        data:
+          grund: P4 Nachtgarantie 04:00
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ww_v3_nachtladung_erfolgt
+
+  - id: ww_v3_stop_ziel
+    alias: WW V3 - Stop am effektiven Ziel
+    mode: single
+    trigger:
+      - platform: template
+        value_template: >-
+          {% set hygiene_laeuft = 'Hygiene' in states('input_text.ww_v3_aktive_strategie') %}
+          {% set ziel = states('input_number.ww_v3_hygiene_ziel') | float(60)
+             if hygiene_laeuft else states('sensor.ww_v3_effektives_ziel') | float(51) %}
+          {{ states('sensor.ww_v3_warmwassertemperatur') | float(0) >= ziel }}
+      - platform: time_pattern
+        minutes: "/2"
+    condition:
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_mindestlaufzeit_erreicht
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set hygiene_laeuft = 'Hygiene' in states('input_text.ww_v3_aktive_strategie') %}
+          {% set ziel = states('input_number.ww_v3_hygiene_ziel') | float(60)
+             if hygiene_laeuft else states('sensor.ww_v3_effektives_ziel') | float(51) %}
+          {{ states('sensor.ww_v3_warmwassertemperatur') | float(0) >= ziel }}
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.boiler_dhw_onetime
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v3_letztes_ladeende
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_stop_ziel
+          trigger: Zieltemperatur erreicht
+          decision: Ladung gestoppt
+          reason: "Warmwasser {{ states('sensor.ww_v3_warmwassertemperatur') }} C >= Ziel"
+          action: switch.boiler_dhw_onetime ausschalten
+          result: Erfolgreich
+          severity: info
+
+  - id: ww_v3_sicherheitsabschaltung_maxdauer
+    alias: WW V3 - Sicherheitsabschaltung maximale Ladedauer
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    condition:
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "on"
+      - condition: template
+        value_template: >-
+          {% set letzte = states('input_datetime.ww_v3_letzte_ladung') %}
+          {{ letzte not in ['unknown','unavailable','']
+             and (now() - as_datetime(letzte)).total_seconds() / 60
+                 >= (states('input_number.ww_v3_max_ladedauer_minuten') | float(150)) }}
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.boiler_dhw_onetime
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v3_letztes_ladeende
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_sicherheitsabschaltung_maxdauer
+          decision: Sicherheitsabschaltung
+          reason: "Maximale Ladedauer ({{ states('input_number.ww_v3_max_ladedauer_minuten') }} min) ueberschritten"
+          action: switch.boiler_dhw_onetime zwangsweise ausschalten
+          result: Sicherheitsabschaltung ausgefuehrt
+          severity: critical
+
+  - id: ww_v3_hygiene_pruefung
+    alias: WW V3 - Optionaler Hygienezyklus
+    mode: single
+    trigger:
+      - platform: time
+        at: "02:00:00"
+    condition:
+      - condition: time
+        weekday:
+          - sun
+      - condition: state
+        entity_id: input_boolean.ww_v3_hygiene_aktiv
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_hygiene_faellig
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_pflichtdaten_gueltig
+        state: "on"
+    action:
+      - service: script.ww_v3_ladung_starten
+        data:
+          grund: P5 Optionaler Hygienezyklus
+          hygiene: true
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_hygiene_pruefung
+          decision: Hygienezyklus gestartet
+          reason: Temperatur-Maximum 7 Tage unter Hygieneziel
+          action: "switch.boiler_dhw_onetime einschalten, Ziel {{ states('input_number.ww_v3_hygiene_ziel') }} C"
+          result: Gestartet
+          severity: info
+      - wait_template: >-
+          {{ states('sensor.ww_v3_warmwassertemperatur') | float(0)
+             >= states('input_number.ww_v3_hygiene_ziel') | float(60) }}
+        timeout: "02:30:00"
+        continue_on_timeout: true
+      - service: switch.turn_off
+        target:
+          entity_id: switch.boiler_dhw_onetime
+      - if:
+          - condition: template
+            value_template: >-
+              {{ states('sensor.ww_v3_warmwassertemperatur') | float(0)
+                 >= states('input_number.ww_v3_hygiene_ziel') | float(60) }}
+        then:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v3_letzter_hygienezyklus
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          - service: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.ww_v3_hygiene_erfolgt
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_hygiene_pruefung
+              decision: Hygienezyklus erfolgreich
+              reason: Zieltemperatur erreicht
+              action: switch.boiler_dhw_onetime ausschalten
+              result: Erfolgreich
+              severity: info
+        else:
+          - service: script.ww_v3_debug_log
+            data:
+              source: ww_v3_hygiene_pruefung
+              decision: Hygienezyklus abgebrochen
+              reason: "Zeitlimit 2:30h erreicht, Zieltemperatur nicht erreicht"
+              action: switch.boiler_dhw_onetime ausschalten
+              result: Zeitueberschreitung
+              severity: warning
+
+  - id: ww_v3_lernen_nacht_snapshot
+    alias: WW V3 - Nacht-Referenz 22:00
+    trigger:
+      - platform: time
+        at: "22:00:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_nacht_referenz
+        data:
+          value: "{{ states('sensor.ww_v3_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v3_lernen_nacht
+    alias: WW V3 - Nachtverlust lernen 05:25
+    trigger:
+      - platform: time
+        at: "05:25:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_nachtladung_erfolgt
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v3_nachtverlust_gelernt') | float(4) }}"
+          neu: >-
+            {{ [states('input_number.ww_v3_nacht_referenz') | float(50)
+                - states('sensor.ww_v3_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_nachtverlust_gelernt
+        data:
+          value: "{{ (alt * 0.7 + neu * 0.3) | round(1) }}"
+
+  - id: ww_v3_verbrauch_snapshot_morgen
+    alias: WW V3 - Verbrauch Morgen Snapshot 05:30
+    trigger:
+      - platform: time
+        at: "05:30:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_verbrauch_referenz
+        data:
+          value: "{{ states('sensor.ww_v3_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v3_verbrauch_lernen_morgen
+    alias: WW V3 - Verbrauch Morgen lernen 09:00
+    trigger:
+      - platform: time
+        at: "09:00:00"
+    condition:
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v3_verbrauch_morgen_gelernt') | float(4) }}"
+          neu: >-
+            {{ [states('input_number.ww_v3_verbrauch_referenz') | float(50)
+                - states('sensor.ww_v3_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_verbrauch_morgen_gelernt
+        data:
+          value: "{{ (alt * 0.75 + neu * 0.25) | round(1) }}"
+
+  - id: ww_v3_verbrauch_snapshot_abend
+    alias: WW V3 - Verbrauch Abend Snapshot 17:00
+    trigger:
+      - platform: time
+        at: "17:00:00"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_verbrauch_referenz
+        data:
+          value: "{{ states('sensor.ww_v3_warmwassertemperatur') | float(50) }}"
+
+  - id: ww_v3_verbrauch_lernen_abend
+    alias: WW V3 - Verbrauch Abend lernen 21:00
+    trigger:
+      - platform: time
+        at: "21:00:00"
+    condition:
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "off"
+    action:
+      - variables:
+          alt: "{{ states('input_number.ww_v3_verbrauch_abend_gelernt') | float(3) }}"
+          neu: >-
+            {{ [states('input_number.ww_v3_verbrauch_referenz') | float(50)
+                - states('sensor.ww_v3_warmwassertemperatur') | float(50), 0] | max }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_verbrauch_abend_gelernt
+        data:
+          value: "{{ (alt * 0.75 + neu * 0.25) | round(1) }}"
+
+  - id: ww_v3_kostenabschluss
+    alias: WW V3 - Kosten und Energie erfassen
+    trigger:
+      - platform: state
+        entity_id: switch.boiler_dhw_onetime
+        from: "on"
+        to: "off"
+    variables:
+      e: "{{ states('input_text.ww_v3_wp_energy_entity') }}"
+      start: "{{ states('input_number.ww_v3_wp_energy_start') | float(0) }}"
+      ende: "{{ states(e) | float(0) if e not in ['unknown','unavailable',''] else 0 }}"
+      verbrauch: "{{ [ende - start, 0] | max }}"
+      pv: "{{ 'PV' in states('input_text.ww_v3_letzter_grund') }}"
+      preis_eur: "{{ states('sensor.ww_v3_tibber_preis') | float(0) / 100 }}"
+      einspeise_eur: "{{ states('input_number.ww_v3_einspeiseverguetung') | float(8) / 100 }}"
+    condition:
+      - condition: template
+        value_template: "{{ e not in ['unknown','unavailable',''] and verbrauch | float(0) > 0 }}"
+    action:
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_kosten_heute
+        data:
+          value: >-
+            {{ (states('input_number.ww_v3_kosten_heute') | float(0)
+                + verbrauch * (einspeise_eur if pv else preis_eur)) | round(2) }}
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.ww_v3_einsparung_heute
+        data:
+          value: >-
+            {{ (states('input_number.ww_v3_einsparung_heute') | float(0)
+                + (verbrauch | float(0)) * ([preis_eur - einspeise_eur, 0] | max if pv else 0)) | round(2) }}
+      - choose:
+          - conditions: "{{ pv }}"
+            sequence:
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.ww_v3_pv_energie_heute
+                data:
+                  value: >-
+                    {{ (states('input_number.ww_v3_pv_energie_heute') | float(0) + verbrauch) | round(2) }}
+        default:
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.ww_v3_netz_energie_heute
+            data:
+              value: >-
+                {{ (states('input_number.ww_v3_netz_energie_heute') | float(0) + verbrauch) | round(2) }}
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.ww_v3_letztes_ladeende
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_kostenabschluss
+          decision: Kosten erfasst
+          reason: "{{ 'PV-Nutzung' if pv else 'Netzbezug' }}, Verbrauch {{ verbrauch | round(3) }} kWh"
+          action: keine
+          result: Erfolgreich
+          severity: info
+          send_pushover: false
+
+  - id: ww_v3_debug_strategiewechsel
+    alias: WW V3 - Debug Strategiewechsel
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: sensor.ww_v3_aktive_strategie
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_debug_mode
+        state: "on"
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+    action:
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_debug_strategiewechsel
+          trigger: Strategiewechsel
+          decision: "{{ trigger.from_state.state }} -> {{ trigger.to_state.state }}"
+          reason: "Naechste Ladung: {{ states('sensor.ww_v3_naechste_ladung') }}"
+          action: keine
+          result: Information
+          severity: info
+
+  - id: ww_v3_debug_sensorfehler
+    alias: WW V3 - Debug Sensorausfall
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id:
+          - sensor.ww_v3_warmwassertemperatur
+          - sensor.ww_v3_tibber_preis
+          - sensor.energy_production_today
+          - sensor.energy_production_today_2
+        to:
+          - unknown
+          - unavailable
+        for: "00:05:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_debug_mode
+        state: "on"
+    action:
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_debug_sensorfehler
+          trigger: "{{ trigger.entity_id }}"
+          decision: Sensorausfall erkannt
+          reason: "{{ trigger.entity_id }} seit mehr als 5 Minuten nicht verfuegbar"
+          action: keine
+          result: Warnung
+          severity: warning
+
+  # Neu in v3 (nur moeglich, weil EMS-ESP ein unabhaengiges Hardware-Signal
+  # liefert): erkennt, wenn wir eine Ladung angefordert haben, der Boiler
+  # aber laut EMS-Bus seit 10 Minuten nicht tatsaechlich laedt - moeglicher
+  # Hinweis auf ein geraeteseitiges Problem (z. B. Stoerung, Verdichter
+  # blockiert, EMS-Bus-Kommunikationsfehler).
+  - id: ww_v3_debug_ladung_ohne_hardware_reaktion
+    alias: WW V3 - Debug Ladung ohne Hardware-Reaktion
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: switch.boiler_dhw_onetime
+        to: "on"
+        for: "00:10:00"
+    condition:
+      - condition: state
+        entity_id: switch.boiler_dhw_onetime
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.ww_v3_ladung_aktiv_hardware
+        state: "off"
+    action:
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_debug_ladung_ohne_hardware_reaktion
+          decision: Moegliche Geraetestoerung erkannt
+          reason: >-
+            switch.boiler_dhw_onetime seit 10 Minuten an, aber weder
+            binary_sensor.boiler_dhw_charging noch _recharging melden eine
+            aktive Ladung
+          action: keine automatische Aktion
+          result: Warnung
+          severity: warning
+
+  # Neu in v3: haelt das native EMS-ESP-Feature "PV laedt Warmwasser auf"
+  # (switch.thermostat_pvenabledhw) deaktiviert, solange ww_v3 aktiv ist -
+  # gemaess Anwenderentscheidung soll ausschliesslich ww_v3 ueber
+  # Ladeentscheidungen bestimmen (keine zwei unkoordinierten
+  # Entscheidungssysteme). Greift bei HA-Start (falls die Einstellung im
+  # EMS-ESP-Geraet selbst wieder aktiviert wurde) und sofort, falls jemand
+  # sie waehrend des Betriebs wieder einschaltet. Wird NICHT erzwungen,
+  # solange input_boolean.ww_v3_aktiv aus ist (manuelle Uebersteuerung -
+  # dann darf der Anwender frei entscheiden).
+  - id: ww_v3_pvenabledhw_sperren
+    alias: WW V3 - Natives PV-Aufladen sperren
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: switch.thermostat_pvenabledhw
+        to: "on"
+      - platform: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: input_boolean.ww_v3_aktiv
+        state: "on"
+      - condition: state
+        entity_id: switch.thermostat_pvenabledhw
+        state: "on"
+    action:
+      - service: switch.turn_off
+        target:
+          entity_id: switch.thermostat_pvenabledhw
+      - service: script.ww_v3_debug_log
+        data:
+          source: ww_v3_pvenabledhw_sperren
+          decision: Natives PV-Aufladen deaktiviert
+          reason: >-
+            ww_v3 hat gemaess Anwendervorgabe die alleinige Ladeentscheidung;
+            Doppelsteuerung durch die EMS-ESP-eigene PV-Funktion wird
+            vermieden
+          action: switch.thermostat_pvenabledhw ausschalten
+          result: Erfolgreich
+          severity: info
+          send_pushover: false
+
+  - id: ww_v3_debug_test_button
+    alias: WW V3 - Debug Testbutton
+    trigger:
+      - platform: state
+        entity_id: input_button.ww_v3_debug_test
+    action:
+      - service: script.ww_v3_pushover_test
+
+  - id: ww_v3_regelungsdurchlauf_heartbeat
+    alias: WW V3 - Regelungsdurchlauf Heartbeat
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    action:
+      - if:
+          - condition: state
+            entity_id: binary_sensor.ww_v3_pflichtdaten_gueltig
+            state: "on"
+        then:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v3_letzter_erfolgreicher_durchlauf
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+        else:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.ww_v3_letzter_uebersprungener_durchlauf
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.ww_v3_status_result
+            data:
+              value: "Durchlauf uebersprungen: Pflichtdaten ungueltig ({{ states('sensor.ww_v3_diagnose_pflichtentities') }})"
+
+  - id: ww_v3_reset
+    alias: WW V3 - Tagesreset
+    trigger:
+      - platform: time
+        at: "00:00:05"
+    action:
+      - service: counter.reset
+        target:
+          entity_id: counter.ww_v3_ladungen_heute
+      - service: input_boolean.turn_off
+        target:
+          entity_id:
+            - input_boolean.ww_v3_nachtladung_erfolgt
+            - input_boolean.ww_v3_hygiene_erfolgt
+      - service: input_number.set_value
+        target:
+          entity_id:
+            - input_number.ww_v3_kosten_heute
+            - input_number.ww_v3_einsparung_heute
+            - input_number.ww_v3_pv_energie_heute
+            - input_number.ww_v3_netz_energie_heute
+        data:
+          value: 0

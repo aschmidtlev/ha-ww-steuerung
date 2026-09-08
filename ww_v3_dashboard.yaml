@@ -1,0 +1,645 @@
+# =============================================================================
+# Lovelace-Dashboard: Warmwassersteuerung ww_v3
+# Ausschliesslich native Home-Assistant-Karten (keine HACS-Abhaengigkeit).
+# Keine Bosch-Cloud-Entity wird mehr referenziert (Migration von ww_v2 auf
+# das lokale EMS-ESP-Gateway, siehe ww_v3_changelog.md). switch.boiler_
+# dhw_onetime wird bewusst NICHT als bedienbarer Schalter in Uebersicht/
+# Steuerung gezeigt (gleiche Design-Entscheidung wie in v2, siehe
+# ww_v2_quality_report.md Abschnitt "Bedienung vs. Status") - der Ladezustand
+# wird stattdessen ueber den schreibgeschuetzten binary_sensor.ww_v3_
+# ladung_aktiv (Befehl) und binary_sensor.ww_v3_ladung_aktiv_hardware
+# (tatsaechliche Geraetebestaetigung, neu in v3) angezeigt.
+# =============================================================================
+title: Warmwassersteuerung ww_v3
+views:
+  # ===========================================================================
+  # 1. Uebersicht
+  # ===========================================================================
+  - title: Uebersicht
+    path: ww_v3_uebersicht
+    icon: mdi:water-boiler
+    type: masonry
+    badges:
+      - entity: binary_sensor.ww_v3_system_aktiv
+        name: Automatik
+      - entity: binary_sensor.ww_v3_ladung_aktiv
+        name: Ladung
+      - entity: binary_sensor.ww_v3_pv_ueberschuss
+        name: PV-Ueberschuss
+      - entity: binary_sensor.home_bestpreis_zeitraum
+        name: Tibber Bestpreis
+      - entity: binary_sensor.ww_v3_marstek_verfuegbar
+        name: Speicher
+    cards:
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v3_ampel
+            state: rot
+        card:
+          type: markdown
+          content: >-
+            # 🔴 ROT
+
+            {{ state_attr('sensor.ww_v3_ampel','klartext') }}
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v3_ampel
+            state: orange
+        card:
+          type: markdown
+          content: >-
+            ## 🟠 ORANGE
+
+            {{ state_attr('sensor.ww_v3_ampel','klartext') }}
+      - type: conditional
+        conditions:
+          - entity: sensor.ww_v3_ampel
+            state: gruen
+        card:
+          type: markdown
+          content: >-
+            ## 🟢 GRUEN
+
+            {{ state_attr('sensor.ww_v3_ampel','klartext') }}
+
+      - type: conditional
+        conditions:
+          - entity: input_boolean.ww_v3_debug_mode
+            state: "on"
+        card:
+          type: markdown
+          content: "⚠️ **Debug-Modus ist aktiv** – Entscheidungen werden protokolliert und per Pushover gesendet."
+
+      - type: gauge
+        entity: sensor.ww_v3_warmwassertemperatur
+        name: Warmwassertemperatur
+        min: 20
+        max: 65
+        needle: true
+        severity:
+          red: 20
+          yellow: 44
+          green: 47
+
+      - type: entities
+        title: Aktueller Plan
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_aktive_strategie
+            name: Aktive Strategie
+          - entity: sensor.ww_v3_naechste_ladung
+            name: Naechste geplante Ladung
+          - entity: sensor.ww_v3_warmwassertemperatur
+            name: Isttemperatur
+          - entity: sensor.ww_v3_dynamisches_ziel
+            name: Dynamisches Ziel
+          - entity: sensor.ww_v3_effektives_ziel
+            name: Effektives Ziel
+          - type: attribute
+            entity: sensor.ww_v3_dynamisches_ziel
+            attribute: begruendung
+            name: Begruendung
+
+      - type: entities
+        title: PV und Netz (aktuell)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_pv_leistung_ost
+            name: PV Leistung Ost
+          - entity: sensor.ww_v3_pv_leistung_west
+            name: PV Leistung West
+          - entity: sensor.ww_v3_pv_leistung_gesamt
+            name: PV Leistung Gesamt
+          - entity: sensor.gesamtleistung_haushalt
+            name: Hausverbrauch
+          - entity: sensor.ww_v3_netzbezug_watt
+            name: Netzbezug
+          - entity: sensor.ww_v3_netzeinspeisung_watt
+            name: Netzeinspeisung
+
+      - type: entities
+        title: Wirtschaftlichkeit (kurz)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_tibber_preis
+            name: Strompreis aktuell
+          - entity: sensor.ww_v3_naechster_bestpreis_start
+            name: Naechster Bestpreis-Start
+          - entity: sensor.ww_v3_kostenstatus
+            name: Kosten heute
+
+  # ===========================================================================
+  # 2. Steuerung
+  # ===========================================================================
+  - title: Steuerung
+    path: ww_v3_steuerung
+    icon: mdi:tune
+    type: masonry
+    cards:
+      - type: entities
+        title: Bedienung
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ww_v3_aktiv
+            name: Optimierung aktiv
+          - entity: input_boolean.ww_v3_pv_vorrang
+            name: PV-Vorrang bis Maximaltemperatur
+          - entity: input_boolean.ww_v3_marstek_nutzen
+            name: Marstek beruecksichtigen
+          - entity: input_boolean.ww_v3_hygiene_aktiv
+            name: Hygienezyklus freigegeben
+
+      - type: conditional
+        conditions:
+          - entity: binary_sensor.ww_v3_manuelle_uebersteuerung
+            state: "on"
+        card:
+          type: markdown
+          content: "⚠️ **Manuelle Uebersteuerung aktiv** – die Automatik ist ausgeschaltet, es erfolgt keine automatische Ladung. Das native EMS-ESP-PV-Aufladen wird in diesem Zustand nicht mehr von ww_v3 gesperrt."
+
+      - type: entities
+        title: Status (nur Anzeige)
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.ww_v3_ladung_aktiv
+            name: Ladung angefordert (Befehl)
+          - entity: binary_sensor.ww_v3_ladung_aktiv_hardware
+            name: Ladung laeuft (Geraetebestaetigung)
+          - entity: binary_sensor.ww_v3_manuelle_uebersteuerung
+            name: Manuelle Uebersteuerung
+          - entity: binary_sensor.ww_v3_kritischer_bedarf
+            name: Kritischer Bedarf
+          - entity: binary_sensor.ww_v3_komfortbedarf
+            name: Komfortbedarf
+          - entity: binary_sensor.ww_v3_ladebedarf
+            name: Ladebedarf
+          - entity: binary_sensor.ww_v3_antitakt_frei
+            name: Anti-Takt frei
+          - entity: binary_sensor.ww_v3_mindestlaufzeit_erreicht
+            name: Mindestlaufzeit erreicht
+
+      - type: entities
+        title: Schutz und Effizienz
+        show_header_toggle: false
+        entities:
+          - entity: input_number.ww_v3_kritisches_minimum
+            name: Kritisches Minimum
+          - entity: input_number.ww_v3_komfort_minimum
+            name: Komfortminimum
+          - entity: input_number.ww_v3_normalziel
+            name: Normalziel
+          - entity: input_number.ww_v3_maximaltemperatur
+            name: Maximaltemperatur
+          - entity: input_number.ww_v3_start_hysterese
+            name: Start-Hysterese
+          - entity: input_number.ww_v3_mindestlaufzeit
+            name: Mindestlaufzeit
+          - entity: input_number.ww_v3_antitakt_sperre
+            name: Anti-Takt-Sperre
+          - entity: input_number.ww_v3_max_ladedauer_minuten
+            name: Maximale Ladedauer (Sicherheitsabschaltung)
+
+      - type: entities
+        title: Wirtschaftlichkeit (Einstellungen)
+        show_header_toggle: false
+        entities:
+          - entity: input_number.ww_v3_einspeiseverguetung
+            name: Einspeiseverguetung
+          - entity: input_number.ww_v3_mindestvorteil
+            name: Mindestvorteil Eigenverbrauch
+          - entity: input_number.ww_v3_einspeiseschwelle
+            name: Mindest-Einspeisung fuer PV-Ueberschuss
+          - entity: input_number.ww_v3_pv_tag_schwelle
+            name: PV-Tag ab Prognose (Ost+West)
+          - entity: input_number.ww_v3_schwache_pv_schwelle
+            name: Schwache PV-Prognose unter (Ost+West)
+
+      - type: entities
+        title: Hygiene-Monitoring
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ww_v3_hygiene_aktiv
+            name: Automatik freigegeben
+          - entity: input_number.ww_v3_hygiene_ziel
+            name: Zieltemperatur
+          - entity: sensor.ww_v3_temperatur_maximum_7_tage
+            name: Maximum letzte 7 Tage
+          - entity: binary_sensor.ww_v3_hygiene_faellig
+            name: Zyklus faellig
+          - entity: binary_sensor.ww_v3_hygieneziel_ueber_geraetemaximum
+            name: Ziel ueber Geraetemaximum (Achtung)
+          - entity: input_datetime.ww_v3_letzter_hygienezyklus
+            name: Letzter erfolgreicher Zyklus
+          - entity: input_boolean.ww_v3_hygiene_erfolgt
+            name: Heute erfolgt
+
+      - type: entities
+        title: Marstek Batteriespeicher
+        show_header_toggle: false
+        entities:
+          - entity: sensor.marstek_venus_modbus_soc_batterie
+            name: SoC
+          - entity: sensor.ww_v3_marstek_stufe
+            name: Stufe
+          - entity: input_number.ww_v3_marstek_freigabe_soc
+            name: Freigabe-SoC
+          - entity: input_number.ww_v3_marstek_schutz_soc
+            name: Schutz-SoC
+          - entity: binary_sensor.ww_v3_marstek_verfuegbar
+            name: Verbindung verfuegbar
+          - entity: binary_sensor.ww_v3_marstek_freigegeben
+            name: WW-Freigabe durch Speicher
+
+      - type: markdown
+        title: EMS-ESP native Zusatzfunktionen (manuell, nicht von ww_v3 automatisiert)
+        content: >-
+          Diese Funktionen werden direkt vom EMS-ESP-Gateway bereitgestellt.
+          ww_v3 steuert sie **nicht** automatisch (Ausnahme: das native
+          PV-Aufladen wird aktiv gesperrt, siehe unten), um keine zweite,
+          unkoordinierte Entscheidungsebene zu erzeugen. Manuelle Bedienung
+          erfolgt auf eigene Verantwortung ausserhalb der ww_v3-Logik.
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: switch.thermostat_pvenabledhw
+            name: "EMS-ESP PV-Aufladen (wird von ww_v3 automatisch ausgeschaltet gehalten)"
+          - entity: switch.boiler_dhw_dhwprio
+            name: DHW-Prioritaet gegenueber Heizkreis (manuell)
+          - entity: select.boiler_dhw_comfort1
+            name: Komfortmodus (Geraet)
+          - entity: select.boiler_dhw_circmode
+            name: Zirkulationspumpen-Modus (Geraet)
+
+  # ===========================================================================
+  # 3. Energie und PV
+  # ===========================================================================
+  - title: Energie und PV
+    path: ww_v3_energie
+    icon: mdi:solar-power-variant
+    type: masonry
+    cards:
+      - type: entities
+        title: PV Ost / West (aktuell)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_pv_leistung_ost
+            name: Leistung Ost (String A)
+          - entity: sensor.ww_v3_pv_leistung_west
+            name: Leistung West (String B)
+          - entity: sensor.ww_v3_pv_leistung_gesamt
+            name: Leistung Gesamt
+          - type: attribute
+            entity: sensor.ww_v3_pv_leistung_gesamt
+            attribute: modus
+            name: Verfuegbarkeit
+          - entity: binary_sensor.ww_v3_pv_ost_verfuegbar
+            name: Ost verbunden
+          - entity: binary_sensor.ww_v3_pv_west_verfuegbar
+            name: West verbunden
+
+      - type: entities
+        title: PV-Forecast (Ost + West kombiniert)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.energy_production_today
+            name: Forecast heute Ost
+          - entity: sensor.energy_production_today_2
+            name: Forecast heute West
+          - entity: sensor.ww_v3_pv_forecast_rest_heute_gesamt
+            name: Restprognose heute (Ost+West)
+          - entity: sensor.ww_v3_pv_forecast_naechste_stunde_gesamt
+            name: Prognose naechste Stunde (Ost+West)
+          - entity: sensor.energy_production_tomorrow
+            name: Forecast morgen Ost
+          - entity: sensor.energy_production_tomorrow_2
+            name: Forecast morgen West
+          - entity: sensor.ww_v3_pv_forecast_morgen_gesamt
+            name: Forecast morgen (Ost+West)
+
+      - type: entities
+        title: Netz
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_netzbezug_watt
+            name: Netzbezug
+          - entity: sensor.ww_v3_netzeinspeisung_watt
+            name: Netzeinspeisung
+          - entity: sensor.ww_v3_pv_ueberschuss_watt
+            name: PV-Ueberschuss
+          - entity: sensor.gesamtleistung_haushalt
+            name: Hausverbrauch
+          - entity: sensor.evu_energie
+            name: Netzbezug gesamt (Zaehler)
+          - entity: sensor.evu_energieeinspeisung
+            name: Einspeisung gesamt (Zaehler)
+
+      - type: entities
+        title: Waermepumpe / Energiezaehler
+        show_header_toggle: false
+        entities:
+          - entity: sensor.wp_gesamtleistung
+            name: WP Momentanleistung
+          - entity: sensor.ww_v3_wp_energie_gesamt
+            name: WP Energie gesamt (Riemann-Integration)
+          - entity: sensor.ww_v3_wp_energie_woche
+            name: WP Energie diese Woche
+          - entity: sensor.ww_v3_wp_energie_monat
+            name: WP Energie diesen Monat
+
+      - type: history-graph
+        title: Warmwassertemperatur und Ziele (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_warmwassertemperatur
+          - sensor.ww_v3_dynamisches_ziel
+          - sensor.ww_v3_effektives_ziel
+
+      - type: history-graph
+        title: PV Ost / West / Gesamt (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_pv_leistung_ost
+          - sensor.ww_v3_pv_leistung_west
+          - sensor.ww_v3_pv_leistung_gesamt
+
+      - type: history-graph
+        title: Netzbezug und Netzeinspeisung (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_netzbezug_watt
+          - sensor.ww_v3_netzeinspeisung_watt
+
+  # ===========================================================================
+  # 4. Kostenanalyse
+  # ===========================================================================
+  - title: Kostenanalyse
+    path: ww_v3_kosten
+    icon: mdi:cash-multiple
+    type: masonry
+    cards:
+      - type: markdown
+        content: >-
+          **Kennzeichnung der Werte:** gemessen = direkt aus einem Zaehler
+          (z. B. WP-Energie); berechnet = aus gemessenen Werten mit dem Preis
+          zum Ladezeitpunkt errechnet (Kosten/Einsparung heute); geschaetzt =
+          Wochen-/Monatskosten auf Basis des *aktuellen* Strompreises statt
+          der historischen Einzelpreise je Ladevorgang.
+
+      - type: entities
+        title: Strompreis (gemessen)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_tibber_preis
+            name: Strompreis aktuell
+          - entity: sensor.ww_v3_tibber_leading24
+            name: Leading24 Durchschnitt
+          - entity: sensor.ww_v3_naechster_bestpreis_start
+            name: Naechster Bestpreis-Start
+          - entity: sensor.ww_v3_naechster_bestpreis_in
+            name: Naechster Bestpreis in
+          - entity: input_number.ww_v3_einspeiseverguetung
+            name: Einspeiseverguetung
+
+      - type: entities
+        title: Kosten heute (berechnet)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_kostenstatus
+            name: Kosten heute
+          - type: attribute
+            entity: sensor.ww_v3_kostenstatus
+            attribute: einsparung_eur
+            name: Einsparung heute
+          - type: attribute
+            entity: sensor.ww_v3_kostenstatus
+            attribute: pv_energie_kwh
+            name: PV-Energie WW heute (gemessen)
+          - type: attribute
+            entity: sensor.ww_v3_kostenstatus
+            attribute: netz_energie_kwh
+            name: Netzenergie WW heute (gemessen)
+          - type: attribute
+            entity: sensor.ww_v3_kostenstatus
+            attribute: energiezaehler_konfiguriert
+            name: Energiezaehler funktionsfaehig
+
+      - type: entities
+        title: Woche / Monat (gemessen + geschaetzt)
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_wp_energie_woche
+            name: WP Energie diese Woche (gemessen)
+          - entity: sensor.ww_v3_kosten_woche_geschaetzt
+            name: Kosten diese Woche (geschaetzt)
+          - entity: sensor.ww_v3_wp_energie_monat
+            name: WP Energie diesen Monat (gemessen)
+          - entity: sensor.ww_v3_kosten_monat_geschaetzt
+            name: Kosten diesen Monat (geschaetzt)
+
+      - type: history-graph
+        title: Kosten und Einsparung heute (Verlauf)
+        hours_to_show: 168
+        entities:
+          - input_number.ww_v3_kosten_heute
+          - input_number.ww_v3_einsparung_heute
+
+  # ===========================================================================
+  # 5. Debug
+  # ===========================================================================
+  - title: Debug
+    path: ww_v3_debug
+    icon: mdi:bug
+    type: masonry
+    cards:
+      # --- 5.1 Debug-Steuerung -------------------------------------------
+      - type: conditional
+        conditions:
+          - entity: input_boolean.ww_v3_debug_mode
+            state: "on"
+        card:
+          type: markdown
+          content: "⚠️ **Debug-Modus ist aktiv** – jede relevante Entscheidung wird protokolliert und per Pushover gesendet."
+
+      - type: entities
+        title: Debug-Steuerung
+        show_header_toggle: false
+        entities:
+          - entity: input_boolean.ww_v3_debug_mode
+            name: Debug-Modus
+          - entity: input_button.ww_v3_debug_test
+            name: Pushover-Testnachricht senden
+          - entity: sensor.ww_v3_last_pushover_status
+            name: Letzter Pushover-Status
+          - entity: input_datetime.ww_v3_letzte_pushover_zeit
+            name: Letzte Pushover-Sendezeit
+          - entity: input_number.ww_v3_pushover_mindestabstand_min
+            name: Mindestabstand identischer Meldungen
+
+      # --- 5.2 Aktueller Steuerungsstatus ---------------------------------
+      - type: entities
+        title: Aktueller Steuerungsstatus
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_warmwassertemperatur
+            name: Warmwassertemperatur (intern, Regelungsquelle)
+          - entity: sensor.boiler_dhw_curtemp2
+            name: Warmwassertemperatur (extern, Vergleichswert)
+          - entity: binary_sensor.boiler_dhw_tempok
+            name: Geraet meldet Temperatur ok
+          - entity: binary_sensor.ww_v3_ladung_aktiv
+            name: Ladung angefordert (Befehl)
+          - entity: binary_sensor.ww_v3_ladung_aktiv_hardware
+            name: Ladung laeuft (Geraetebestaetigung)
+          - entity: binary_sensor.boiler_dhw_3wayvalve
+            name: 3-Wege-Ventil aktiv
+          - entity: number.boiler_dhw_seltempsingle
+            name: Charge Zieltemperatur (Geraet)
+          - entity: number.boiler_dhw_maxtemp
+            name: Geraete-Maximaltemperatur
+          - entity: sensor.ww_v3_effektives_ziel
+            name: Effektives Ziel (ww_v3)
+          - entity: select.thermostat_dhw_mode
+            name: Thermostat Betriebsmodus
+          - entity: sensor.ww_v3_aktive_strategie
+            name: Aktive Strategie
+          - entity: sensor.ww_v3_last_action
+            name: Letzte Aktion
+          - entity: sensor.ww_v3_last_reason
+            name: Letzte Begruendung
+          - entity: sensor.ww_v3_last_result
+            name: Letztes Ergebnis
+          - entity: input_datetime.ww_v3_letzte_ladung
+            name: Zeitpunkt letzte Ladung
+          - entity: input_datetime.ww_v3_letztes_ladeende
+            name: Zeitpunkt letztes Ladeende
+          - entity: sensor.ww_v3_last_error
+            name: Letzter Fehler
+          - entity: input_datetime.ww_v3_letzter_fehler_zeit
+            name: Zeitpunkt letzter Fehler
+
+      # --- 5.3 Eingangsdaten -----------------------------------------------
+      - type: entities
+        title: Eingangsdaten
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_pv_leistung_ost
+            name: PV Leistung Ost
+          - entity: sensor.ww_v3_pv_leistung_west
+            name: PV Leistung West
+          - entity: sensor.ww_v3_pv_leistung_gesamt
+            name: PV Leistung Gesamt
+          - entity: sensor.ww_v3_pv_forecast_rest_heute_gesamt
+            name: PV-Forecast Rest heute (Ost+West)
+          - entity: sensor.ww_v3_pv_forecast_naechste_stunde_gesamt
+            name: PV-Forecast naechste Stunde (Ost+West)
+          - entity: sensor.ww_v3_pv_forecast_morgen_gesamt
+            name: PV-Forecast morgen (Ost+West)
+          - entity: sensor.ww_v3_netzbezug_watt
+            name: Netzbezug
+          - entity: sensor.ww_v3_netzeinspeisung_watt
+            name: Netzeinspeisung
+          - entity: sensor.gesamtleistung_haushalt
+            name: Hausverbrauch
+          - entity: sensor.ww_v3_tibber_preis
+            name: Strompreis aktuell
+          - entity: input_number.ww_v3_einspeiseverguetung
+            name: Einspeiseverguetung
+          - entity: input_number.ww_v3_kritisches_minimum
+            name: Kritisches Minimum
+          - entity: input_number.ww_v3_komfort_minimum
+            name: Komfortminimum
+          - entity: input_number.ww_v3_maximaltemperatur
+            name: Maximaltemperatur
+          - entity: binary_sensor.ww_v3_antitakt_frei
+            name: Anti-Takt frei
+          - entity: binary_sensor.ww_v3_mindestlaufzeit_erreicht
+            name: Mindestlaufzeit erreicht
+
+      # --- 5.4 Aktionen und Fehler ------------------------------------------
+      - type: entities
+        title: Zaehler
+        show_header_toggle: false
+        entities:
+          - entity: counter.ww_v3_aktionen_gesamt
+            name: Ausgefuehrte Aktionen gesamt
+          - entity: counter.ww_v3_blockierte_aktionen
+            name: Blockierte Aktionen gesamt
+          - entity: counter.ww_v3_fehler_gesamt
+            name: Erkannte Fehler gesamt
+          - entity: counter.ww_v3_ladungen_heute
+            name: Ladungen heute
+
+      - type: logbook
+        title: Steuerungsereignisse (48h)
+        hours_to_show: 48
+        entities:
+          - switch.boiler_dhw_onetime
+          - binary_sensor.ww_v3_kritischer_bedarf
+          - binary_sensor.ww_v3_pv_ueberschuss
+          - binary_sensor.home_bestpreis_zeitraum
+          - input_boolean.ww_v3_hygiene_erfolgt
+          - input_boolean.ww_v3_debug_mode
+          - switch.thermostat_pvenabledhw
+
+      # --- 5.5 Diagnose -------------------------------------------------
+      - type: entities
+        title: Diagnose
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ww_v3_diagnose_pflichtentities
+            name: Nicht verfuegbare Pflicht-Entities
+          - type: attribute
+            entity: sensor.ww_v3_diagnose_pflichtentities
+            attribute: fehlende_entities
+            name: Liste
+          - entity: binary_sensor.ww_v3_pflichtdaten_gueltig
+            name: Pflichtdaten gueltig
+          - entity: input_datetime.ww_v3_letzter_erfolgreicher_durchlauf
+            name: Letzter erfolgreicher Regelungsdurchlauf
+          - entity: input_datetime.ww_v3_letzter_uebersprungener_durchlauf
+            name: Letzter uebersprungener Regelungsdurchlauf
+          - type: attribute
+            entity: sensor.ww_v3_warmwassertemperatur
+            attribute: aktualisiert_vor_sekunden
+            name: Temperatur aktualisiert vor (s)
+          - type: attribute
+            entity: sensor.ww_v3_warmwassertemperatur
+            attribute: veraltet
+            name: Temperatur veraltet
+          - entity: binary_sensor.ww_v3_pv_ost_verfuegbar
+            name: PV Ost verfuegbar
+          - entity: binary_sensor.ww_v3_pv_west_verfuegbar
+            name: PV West verfuegbar
+          - entity: binary_sensor.ww_v3_hygieneziel_ueber_geraetemaximum
+            name: Hygieneziel ueber Geraetemaximum
+
+      # --- 5.6 Diagramme --------------------------------------------------
+      - type: history-graph
+        title: Warmwassertemperatur und Ladung (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_warmwassertemperatur
+          - binary_sensor.ww_v3_ladung_aktiv
+          - binary_sensor.ww_v3_ladung_aktiv_hardware
+
+      - type: history-graph
+        title: PV Ost / West / Gesamt (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_pv_leistung_ost
+          - sensor.ww_v3_pv_leistung_west
+          - sensor.ww_v3_pv_leistung_gesamt
+
+      - type: history-graph
+        title: Netzbezug / Netzeinspeisung (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_netzbezug_watt
+          - sensor.ww_v3_netzeinspeisung_watt
+
+      - type: history-graph
+        title: Strompreis (24h)
+        hours_to_show: 24
+        entities:
+          - sensor.ww_v3_tibber_preis
+          - sensor.ww_v3_tibber_leading24
