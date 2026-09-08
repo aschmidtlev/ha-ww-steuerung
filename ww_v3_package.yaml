@@ -408,12 +408,10 @@ template:
   - binary_sensor:
       - name: WW V3 System aktiv
         unique_id: ww_v3_system_aktiv
-        entity_category: diagnostic
         state: "{{ is_state('input_boolean.ww_v3_aktiv','on') }}"
 
       - name: WW V3 Manuelle Uebersteuerung
         unique_id: ww_v3_manuelle_uebersteuerung
-        entity_category: diagnostic
         state: "{{ not is_state('input_boolean.ww_v3_aktiv','on') }}"
 
       # switch.boiler_dhw_onetime ist der von ww_v3 gesetzte Befehl
@@ -436,7 +434,6 @@ template:
         unique_id: ww_v3_ladung_aktiv_hardware
         device_class: heat
         icon: mdi:progress-check
-        entity_category: diagnostic
         state: >-
           {{ is_state('binary_sensor.boiler_dhw_charging','on')
              or is_state('binary_sensor.boiler_dhw_recharging','on') }}
@@ -447,7 +444,6 @@ template:
       # EMS-ESP-Entities statt water_heater.dhw1/switch.charge.
       - name: WW V3 Pflichtdaten gueltig
         unique_id: ww_v3_pflichtdaten_gueltig
-        entity_category: diagnostic
         state: >-
           {{ states('sensor.ww_v3_warmwassertemperatur') not in ['unknown','unavailable']
              and states('switch.boiler_dhw_onetime') not in ['unknown','unavailable']
@@ -456,13 +452,11 @@ template:
       - name: WW V3 PV Ost verfuegbar
         unique_id: ww_v3_pv_ost_verfuegbar
         device_class: connectivity
-        entity_category: diagnostic
         state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_a') not in ['unknown','unavailable'] }}"
 
       - name: WW V3 PV West verfuegbar
         unique_id: ww_v3_pv_west_verfuegbar
         device_class: connectivity
-        entity_category: diagnostic
         state: "{{ states('sensor.stp10_0_3av_40_040_pv_power_b') not in ['unknown','unavailable'] }}"
 
       - name: WW V3 Kritischer Bedarf
@@ -516,7 +510,6 @@ template:
       - name: WW V3 Marstek verfuegbar
         unique_id: ww_v3_marstek_verfuegbar
         device_class: connectivity
-        entity_category: diagnostic
         state: >-
           {% set s = states('sensor.marstek_venus_modbus_soc_batterie') %}
           {{ is_state('input_boolean.ww_v3_marstek_nutzen','on')
@@ -562,7 +555,6 @@ template:
       - name: WW V3 Hygieneziel ueber Geraetemaximum
         unique_id: ww_v3_hygieneziel_ueber_geraetemaximum
         device_class: problem
-        entity_category: diagnostic
         availability: "{{ states('number.boiler_dhw_maxtemp') not in ['unknown','unavailable'] }}"
         state: >-
           {{ states('input_number.ww_v3_hygiene_ziel') | float(60)
@@ -940,7 +932,6 @@ template:
       # beschreibt.
       - name: WW V3 Diagnose Pflichtentities
         unique_id: ww_v3_diagnose_pflichtentities
-        entity_category: diagnostic
         state: >-
           {% set ids = ['sensor.boiler_dhw_curtemp','switch.boiler_dhw_onetime',
                         'number.boiler_dhw_seltempsingle','sensor.home_aktueller_strompreis',
@@ -970,31 +961,26 @@ template:
       - name: WW V3 Last Action
         unique_id: ww_v3_last_action
         icon: mdi:text-box-outline
-        entity_category: diagnostic
         state: "{{ states('input_text.ww_v3_status_action') }}"
 
       - name: WW V3 Last Reason
         unique_id: ww_v3_last_reason
         icon: mdi:text-box-outline
-        entity_category: diagnostic
         state: "{{ states('input_text.ww_v3_status_reason') }}"
 
       - name: WW V3 Last Result
         unique_id: ww_v3_last_result
         icon: mdi:text-box-outline
-        entity_category: diagnostic
         state: "{{ states('input_text.ww_v3_status_result') }}"
 
       - name: WW V3 Last Error
         unique_id: ww_v3_last_error
         icon: mdi:alert-circle-outline
-        entity_category: diagnostic
         state: "{{ states('input_text.ww_v3_status_error') }}"
 
       - name: WW V3 Last Pushover Status
         unique_id: ww_v3_last_pushover_status
         icon: mdi:bell-outline
-        entity_category: diagnostic
         state: "{{ states('input_text.ww_v3_status_pushover') }}"
 
 # =============================================================================
