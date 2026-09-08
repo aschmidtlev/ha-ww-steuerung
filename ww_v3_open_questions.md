@@ -71,6 +71,36 @@ Existenzabgleich gegen die CSV) ersetzen dies nicht vollständig. **Vor der
 ersten Aktivierung zwingend „Konfiguration überprüfen“ in Home Assistant
 selbst ausführen.**
 
+**B6. `sensor.gesamtleistung_haushalt` wurde durch einen selbst berechneten
+Hausverbrauchs-Sensor ersetzt.**
+Ein Plausibilitaetsvergleich anhand der CSV vom 30.08.2026, 00:35 Uhr (PV=0,
+Waermepumpe im Standby mit 9,8 W) zeigte: `sensor.evu_leistung` (Netzbezug)
+= 699,9 W, aber `sensor.gesamtleistung_haushalt` = nur 193,7 W – ein
+Unterschied von ~506 W, der durch nichts in den vorliegenden Daten erklaert
+wird. Vermutung: die Entity misst nur einen Teil-Stromkreis, nicht das
+gesamte Haus. `sensor.ww_v3_hausverbrauch_berechnet` ersetzt sie jetzt
+ueberall im Dashboard und in der Pflichtdaten-Diagnose durch eine
+Energiebilanz-Berechnung: PV gesamt + Netzbezug − Netzeinspeisung (+
+Batterieleistung, falls Marstek verfuegbar). Zwei Einschraenkungen dieser
+neuen Berechnung:
+- Die Vorzeichenkonvention von `sensor.marstek_venus_modbus_batterieleistung`
+  ist nicht herstellerseitig verifiziert (Annahme: positiv = Entladung).
+  Da Marstek aktuell hardwareseitig ausgefallen ist, hat das derzeit keine
+  praktische Auswirkung (Beitrag = 0), sollte aber geprueft werden, sobald
+  die Modbus-Verbindung wiederhergestellt ist.
+- Die Berechnung geht implizit davon aus, dass PV-Erzeugung entweder lokal
+  verbraucht oder eingespeist wird (keine weiteren Verbraucher/Erzeuger
+  zwischen Wechselrichter und Netzzaehler ausser der Marstek-Batterie). Der
+  urspruengliche Rohwert von `sensor.gesamtleistung_haushalt` bleibt als
+  Attribut `alter_rohwert_sensor_gesamtleistung_haushalt` an
+  `sensor.ww_v3_hausverbrauch_berechnet` sichtbar, falls ein Vergleich
+  gewuenscht ist. Die Entity selbst wird nirgends mehr geloescht oder
+  veraendert – nur nicht mehr referenziert.
+→ Unabhaengig davon lohnt sich eine Pruefung, welchen Stromkreis
+`sensor.gesamtleistung_haushalt` in der Quell-Integration tatsaechlich
+misst (siehe Geraete & Dienste), da das auf ein Konfigurationsproblem
+ausserhalb dieses Packages hindeuten koennte.
+
 ## Teil C – Aus ww_v2 übernommene, weiterhin offene Punkte
 
 Die Punkte B1–B4 aus `ww_v2_open_questions.md` (veraltete Temperatur als

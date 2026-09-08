@@ -49,6 +49,23 @@
   Thermostat-Betriebsart als manuell bedienbare/beobachtbare Zusatzinfos,
   ohne sie zu automatisieren.
 
+## Nachtrag: Hausverbrauch neu berechnet statt Rohwert (2026-09-08)
+
+- **Ersetzt**: `sensor.gesamtleistung_haushalt` wird nicht mehr direkt im
+  Dashboard oder in der Pflichtdaten-Diagnose referenziert. Grund: ein
+  Plausibilitaetsvergleich zeigte, dass dieser externe Sensor bei PV=0 und
+  inaktiver Waermepumpe nur ~28 % des gleichzeitigen Netzbezugs anzeigte
+  (193,7 W vs. 699,9 W) – die Entity misst vermutlich nur einen
+  Teil-Stromkreis, nicht das gesamte Haus.
+- **Neu**: `sensor.ww_v3_hausverbrauch_berechnet` berechnet den Hausverbrauch
+  stattdessen aus der Energiebilanz (PV gesamt + Netzbezug − Netzeinspeisung
+  + Batterieleistung, falls Marstek verfuegbar) und ersetzt den alten Sensor
+  in allen drei Dashboard-Ansichten (Uebersicht, Energie, Debug) sowie in
+  der Pflichtdaten-Diagnoseliste. Der alte Rohwert bleibt als
+  Vergleichsattribut erhalten. Details und dokumentierte Annahmen (u. a.
+  unverifizierte Batterie-Vorzeichenkonvention) siehe
+  `ww_v3_open_questions.md`, Punkt B6.
+
 ## HA-Coding-Standards (Qualitaetsverbesserung, im Rahmen der Migration)
 
 - **Neu**: `entity_category: diagnostic` wurde fuer alle reinen

@@ -110,8 +110,8 @@ views:
             name: PV Leistung West
           - entity: sensor.ww_v3_pv_leistung_gesamt
             name: PV Leistung Gesamt
-          - entity: sensor.gesamtleistung_haushalt
-            name: Hausverbrauch
+          - entity: sensor.ww_v3_hausverbrauch_berechnet
+            name: Hausverbrauch (berechnet)
           - entity: sensor.ww_v3_netzbezug_watt
             name: Netzbezug
           - entity: sensor.ww_v3_netzeinspeisung_watt
@@ -326,8 +326,8 @@ views:
             name: Netzeinspeisung
           - entity: sensor.ww_v3_pv_ueberschuss_watt
             name: PV-Ueberschuss
-          - entity: sensor.gesamtleistung_haushalt
-            name: Hausverbrauch
+          - entity: sensor.ww_v3_hausverbrauch_berechnet
+            name: Hausverbrauch (berechnet)
           - entity: sensor.evu_energie
             name: Netzbezug gesamt (Zaehler)
           - entity: sensor.evu_energieeinspeisung
@@ -538,8 +538,8 @@ views:
             name: Netzbezug
           - entity: sensor.ww_v3_netzeinspeisung_watt
             name: Netzeinspeisung
-          - entity: sensor.gesamtleistung_haushalt
-            name: Hausverbrauch
+          - entity: sensor.ww_v3_hausverbrauch_berechnet
+            name: Hausverbrauch (berechnet)
           - entity: sensor.ww_v3_tibber_preis
             name: Strompreis aktuell
           - entity: input_number.ww_v3_einspeiseverguetung

@@ -724,6 +724,44 @@ template:
         availability: "{{ states('sensor.evu_leistung') not in ['unknown','unavailable'] }}"
         state: "{{ [0 - (states('sensor.evu_leistung') | float(0)), 0] | max | round(0) }}"
 
+      # Ersetzt sensor.gesamtleistung_haushalt als Anzeige-/Pflichtwert:
+      # ein Plausibilitaetsvergleich zeigte, dass sensor.gesamtleistung_
+      # haushalt bei PV=0 und inaktiver Waermepumpe deutlich (~3,6x) unter
+      # dem gleichzeitigen Netzbezug lag - die Entity misst vermutlich nur
+      # einen Teil-Stromkreis, nicht das gesamte Haus (siehe
+      # ww_v3_open_questions.md, Offene Frage 3). Dieser Sensor berechnet
+      # den Hausverbrauch stattdessen aus der Energiebilanz: PV-Erzeugung +
+      # Netzbezug - Netzeinspeisung (+ Batterieleistung, falls Marstek
+      # verfuegbar ist). Der urspruengliche Rohwert bleibt zum Vergleich als
+      # Attribut sichtbar.
+      - name: WW V3 Hausverbrauch berechnet
+        unique_id: ww_v3_hausverbrauch_berechnet
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        icon: mdi:home-lightning-bolt
+        availability: >-
+          {{ states('sensor.ww_v3_pv_leistung_gesamt') not in ['unknown','unavailable']
+             and states('sensor.evu_leistung') not in ['unknown','unavailable'] }}
+        state: >-
+          {% set pv = states('sensor.ww_v3_pv_leistung_gesamt') | float(0) %}
+          {% set bezug = states('sensor.ww_v3_netzbezug_watt') | float(0) %}
+          {% set einspeisung = states('sensor.ww_v3_netzeinspeisung_watt') | float(0) %}
+          {% set batt_verf = is_state('binary_sensor.ww_v3_marstek_verfuegbar','on')
+             and states('sensor.marstek_venus_modbus_batterieleistung') not in ['unknown','unavailable',''] %}
+          {% set batt = states('sensor.marstek_venus_modbus_batterieleistung') | float(0) if batt_verf else 0 %}
+          {{ [(pv + bezug - einspeisung + batt), 0] | max | round(0) }}
+        attributes:
+          formel: "PV gesamt + Netzbezug - Netzeinspeisung + Batterieleistung (falls Marstek verfuegbar)"
+          batterie_beruecksichtigt: >-
+            {{ is_state('binary_sensor.ww_v3_marstek_verfuegbar','on')
+               and states('sensor.marstek_venus_modbus_batterieleistung') not in ['unknown','unavailable',''] }}
+          batterie_vorzeichen_hinweis: >-
+            Vorzeichenkonvention von sensor.marstek_venus_modbus_batterieleistung
+            ist nicht herstellerseitig verifiziert (Annahme: positiv = Entladung).
+            Solange Marstek nicht verfuegbar ist, hat dieses Feld keinen Effekt.
+          alter_rohwert_sensor_gesamtleistung_haushalt: "{{ states('sensor.gesamtleistung_haushalt') }}"
+
       # --- PV-Forecast kombiniert Ost+West (unveraendert) ---------------
       - name: WW V3 PV Forecast Rest Heute Gesamt
         unique_id: ww_v3_pv_forecast_rest_heute_gesamt
@@ -907,7 +945,7 @@ template:
           {% set ids = ['sensor.boiler_dhw_curtemp','switch.boiler_dhw_onetime',
                         'number.boiler_dhw_seltempsingle','sensor.home_aktueller_strompreis',
                         'sensor.energy_production_today','sensor.energy_production_today_2',
-                        'sensor.evu_leistung','sensor.gesamtleistung_haushalt'] %}
+                        'sensor.evu_leistung','sensor.ww_v3_hausverbrauch_berechnet'] %}
           {% set ns = namespace(fehlend=[]) %}
           {% for e in ids %}
             {% if states(e) in ['unknown','unavailable'] %}
@@ -920,7 +958,7 @@ template:
             {% set ids = ['sensor.boiler_dhw_curtemp','switch.boiler_dhw_onetime',
                           'number.boiler_dhw_seltempsingle','sensor.home_aktueller_strompreis',
                           'sensor.energy_production_today','sensor.energy_production_today_2',
-                          'sensor.evu_leistung','sensor.gesamtleistung_haushalt'] %}
+                          'sensor.evu_leistung','sensor.ww_v3_hausverbrauch_berechnet'] %}
             {% set ns = namespace(fehlend=[]) %}
             {% for e in ids %}
               {% if states(e) in ['unknown','unavailable'] %}
