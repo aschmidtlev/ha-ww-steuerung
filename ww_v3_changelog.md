@@ -86,6 +86,26 @@
   in Ladeentscheidungen einbezogen – bleibt ausserhalb des Funktionsumfangs
   "Warmwassersteuerung".
 
+## Nachtrag: Zeitzonen-Bug in Zeitdifferenz-Berechnungen behoben (2026-09-09)
+
+Live-Beobachtung des Anwenders: `binary_sensor.ww_v3_antitakt_frei` und
+`binary_sensor.ww_v3_mindestlaufzeit_erreicht` zeigten nach dem ersten
+Ladezyklus dauerhaft "Nicht verfügbar" statt ein/aus. Ursache (aus dem
+Muster erschlossen, nicht live verifiziert): beide Templates berechneten
+Zeitdifferenzen mit `(now() - as_datetime(zeitstempel)).total_seconds()`.
+`now()` ist zeitzonen-bewusst, `as_datetime()` liefert auf manchen
+HA-Versionen ein zeitzonen-naives Objekt zurueck – die Subtraktion wirft
+dann eine Ausnahme, die HA als `unavailable` anzeigt. Betraf zusaetzlich
+still (ohne UI-Anzeige als "unavailable", da es sich um eine Automations-
+*Bedingung* statt eine Entity handelt) die Bedingung von
+`automation.ww_v3_sicherheitsabschaltung_maxdauer` – dort haette die
+Sicherheitsabschaltung im Zweifel gar nicht ausgeloest.
+
+**Fix**: alle drei Stellen verwenden jetzt `as_timestamp(now()) -
+as_timestamp(zeitstempel)` (reiner Unix-Zeitstempel-Vergleich, keine
+Datetime-Objekt-Subtraktion) – identisches Muster wie bereits im
+Pushover-Dedup in `script.ww_v3_debug_log` erfolgreich im Einsatz.
+
 ## HA-Coding-Standards (Qualitaetsverbesserung, im Rahmen der Migration)
 
 - **Neu**: `entity_category: diagnostic` wurde fuer alle reinen

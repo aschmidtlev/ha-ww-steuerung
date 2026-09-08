@@ -523,13 +523,20 @@ template:
              >= states('input_number.ww_v3_marstek_freigabe_soc') | float(80)
              and is_state('binary_sensor.ww_v3_pv_ueberschuss','on') }}
 
+      # Verwendet as_timestamp() statt now()-as_datetime()-Subtraktion:
+      # Letzteres kann auf manchen HA-Versionen "unavailable" liefern, sobald
+      # ein echter Zeitstempel gespeichert ist, weil as_datetime() dann ein
+      # zeitzonen-naives datetime liefert, das nicht von now() (zeitzonen-
+      # bewusst) subtrahiert werden kann. as_timestamp() vermeidet das, da
+      # beide Seiten als reine Unix-Zeitstempel (float) verglichen werden -
+      # gleiches Muster wie bereits im Pushover-Dedup in script.ww_v3_debug_log.
       - name: WW V3 Antitakt frei
         unique_id: ww_v3_antitakt_frei
         state: >-
           {% set e = states('input_datetime.ww_v3_letztes_ladeende') %}
           {% set s = states('input_number.ww_v3_antitakt_sperre') | float(20) %}
           {{ e in ['unknown','unavailable',''] or
-             (now() - as_datetime(e)).total_seconds() / 60 >= s }}
+             (as_timestamp(now()) - as_timestamp(e)) / 60 >= s }}
 
       - name: WW V3 Mindestlaufzeit erreicht
         unique_id: ww_v3_mindestlaufzeit_erreicht
@@ -537,7 +544,7 @@ template:
           {% set a = states('input_datetime.ww_v3_letzte_ladung') %}
           {% set m = states('input_number.ww_v3_mindestlaufzeit') | float(30) %}
           {{ a in ['unknown','unavailable',''] or
-             (now() - as_datetime(a)).total_seconds() / 60 >= m }}
+             (as_timestamp(now()) - as_timestamp(a)) / 60 >= m }}
 
       - name: WW V3 Hygiene faellig
         unique_id: ww_v3_hygiene_faellig
@@ -1541,7 +1548,7 @@ automation:
         value_template: >-
           {% set letzte = states('input_datetime.ww_v3_letzte_ladung') %}
           {{ letzte not in ['unknown','unavailable','']
-             and (now() - as_datetime(letzte)).total_seconds() / 60
+             and (as_timestamp(now()) - as_timestamp(letzte)) / 60
                  >= (states('input_number.ww_v3_max_ladedauer_minuten') | float(150)) }}
     action:
       - service: switch.turn_off
