@@ -106,6 +106,18 @@ as_timestamp(zeitstempel)` (reiner Unix-Zeitstempel-Vergleich, keine
 Datetime-Objekt-Subtraktion) – identisches Muster wie bereits im
 Pushover-Dedup in `script.ww_v3_debug_log` erfolgreich im Einsatz.
 
+## Nachtrag: Marstek-Vorzeichenbug in der Hausverbrauchsberechnung (2026-09-26)
+
+Nach Wiederherstellung der Marstek-Modbus-Verbindung zeigte ein Live-Wert
+`sensor.marstek_venus_modbus_batterieleistung` = -284 W bei gleichzeitigem
+`sensor.marstek_venus_modbus_wechselrichter_status` = "Discharge" – das
+Gegenteil der bisher dokumentierten Annahme ("positiv = Entladung").
+`sensor.ww_v3_hausverbrauch_berechnet` verwendet jetzt `− Batterieleistung`
+statt `+ Batterieleistung`. Vorher fuehrte eine Batterieentladung dazu, dass
+der berechnete Hausverbrauch faelschlich sank (durch den `max(...,0)`-
+Schutz als dauerhaft 0 W sichtbar, obwohl eine reale Grundlast vorlag).
+Details siehe `ww_v3_open_questions.md`, Punkt B6.
+
 ## HA-Coding-Standards (Qualitaetsverbesserung, im Rahmen der Migration)
 
 - **Neu**: `entity_category: diagnostic` wurde fuer alle reinen

@@ -730,9 +730,20 @@ template:
       # einen Teil-Stromkreis, nicht das gesamte Haus (siehe
       # ww_v3_open_questions.md, Offene Frage 3). Dieser Sensor berechnet
       # den Hausverbrauch stattdessen aus der Energiebilanz: PV-Erzeugung +
-      # Netzbezug - Netzeinspeisung (+ Batterieleistung, falls Marstek
+      # Netzbezug - Netzeinspeisung - Batterieleistung (falls Marstek
       # verfuegbar ist). Der urspruengliche Rohwert bleibt zum Vergleich als
       # Attribut sichtbar.
+      #
+      # Vorzeichenkonvention der Marstek-Batterieleistung am 25.09.2026 live
+      # verifiziert (siehe ww_v3_open_questions.md, Offene Frage B6, jetzt
+      # geloest): sensor.marstek_venus_modbus_batterieleistung war -284 W,
+      # gleichzeitig zeigte sensor.marstek_venus_modbus_wechselrichter_status
+      # = "Discharge". Negativ = Entladung (liefert Leistung an den Haushalt),
+      # positiv = Ladung (verbraucht Leistung) - das Gegenteil der in der
+      # letzten Version dokumentierten Annahme. Deshalb jetzt "- batt" statt
+      # "+ batt": bei Entladung (batt < 0) erhoeht "- batt" den berechneten
+      # Hausverbrauch korrekt, bei Ladung (batt > 0) senkt es ihn korrekt
+      # (die Ladeleistung geht in die Batterie, nicht in den Haushalt).
       - name: WW V3 Hausverbrauch berechnet
         unique_id: ww_v3_hausverbrauch_berechnet
         unit_of_measurement: W
@@ -749,15 +760,15 @@ template:
           {% set batt_verf = is_state('binary_sensor.ww_v3_marstek_verfuegbar','on')
              and states('sensor.marstek_venus_modbus_batterieleistung') not in ['unknown','unavailable',''] %}
           {% set batt = states('sensor.marstek_venus_modbus_batterieleistung') | float(0) if batt_verf else 0 %}
-          {{ [(pv + bezug - einspeisung + batt), 0] | max | round(0) }}
+          {{ [(pv + bezug - einspeisung - batt), 0] | max | round(0) }}
         attributes:
-          formel: "PV gesamt + Netzbezug - Netzeinspeisung + Batterieleistung (falls Marstek verfuegbar)"
+          formel: "PV gesamt + Netzbezug - Netzeinspeisung - Batterieleistung (falls Marstek verfuegbar; negativ=Entladung, positiv=Ladung)"
           batterie_beruecksichtigt: >-
             {{ is_state('binary_sensor.ww_v3_marstek_verfuegbar','on')
                and states('sensor.marstek_venus_modbus_batterieleistung') not in ['unknown','unavailable',''] }}
           batterie_vorzeichen_hinweis: >-
-            Vorzeichenkonvention von sensor.marstek_venus_modbus_batterieleistung
-            ist nicht herstellerseitig verifiziert (Annahme: positiv = Entladung).
+            Am 25.09.2026 live verifiziert: negativ = Entladung, positiv =
+            Ladung (siehe sensor.marstek_venus_modbus_wechselrichter_status).
             Solange Marstek nicht verfuegbar ist, hat dieses Feld keinen Effekt.
           alter_rohwert_sensor_gesamtleistung_haushalt: "{{ states('sensor.gesamtleistung_haushalt') }}"
 
